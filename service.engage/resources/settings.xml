@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+
+  <category label="General">
+    <setting label="Manage slots..." type="action" action="RunScript(special://home/addons/service.engage/script.py,manage_slots)" option="close"/>
+    <setting type="sep"/>
+    <setting id="debug" type="bool" label="Enable debug logging" default="false"/>
+    <setting id="poll_interval" type="slider" label="Poll interval (seconds)" default="30" range="5,5,120" option="int"/>
+    <setting id="catchup_hours" type="slider" label="Catch-up window for missed slots (hours, 0 = off)" default="6" range="0,1,12" option="int"/>
+    <setting id="catchup_max_prompts" type="slider" label="Max times to show a missed-slot banner" default="3" range="1,1,10" option="int"/>
+    <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
+    <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
+  </category>
+
+</settings>

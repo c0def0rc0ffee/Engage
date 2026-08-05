@@ -1,0 +1,33 @@
+# Local release tooling and notes
+/publish-github.sh
+/push-source.sh
+/publish.conf
+/GITHUB-RELEASE-GUIDE.md
+/.publish-allow
+/Github repository
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Synology NAS metadata
+@eaDir/
+
+# Local deploy artefacts
+deploy_log.txt
+
+# Convention output folders (zips distributed via GitHub Releases instead)
+/Engage Dist/
+/Engage Git/
+/Engage App/
+
+# Local editor and tooling state (any dot folder except .github)
+.*/
+!.github/
+
+# Archives, logs, temp files
+*.zip
+*.7z
+*.log
+*.tmp
