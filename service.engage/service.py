@@ -10,8 +10,22 @@ _ADDON_PATH = _ADDON.getAddonInfo('path')
 if _ADDON_PATH and _ADDON_PATH not in sys.path:
     sys.path.insert(0, _ADDON_PATH)
 
+def _publish_version():
+    """Copy the add-on version into the read-only 'version_info' setting so it
+    shows on the settings screen. Best effort: a failure here must not stop the
+    service starting."""
+    try:
+        version = _ADDON.getAddonInfo('version')
+        if version and _ADDON.getSetting('version_info') != version:
+            _ADDON.setSetting('version_info', version)
+    except Exception:
+        xbmc.log('Engage: could not publish version to settings:\n{}'.format(
+            traceback.format_exc()), xbmc.LOGWARNING)
+
+
 if __name__ == '__main__':
     xbmc.log('Engage: service starting', xbmc.LOGINFO)
+    _publish_version()
     try:
         from resources.lib.scheduler import EngageScheduler
         scheduler = EngageScheduler()

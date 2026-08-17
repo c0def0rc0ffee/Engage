@@ -2,6 +2,10 @@
 <settings>
 
   <category label="General">
+    <!-- Read-only. The service writes the running add-on version into this on
+         start-up (see service.py), so it never has to be kept in step by hand. -->
+    <setting id="version_info" type="text" label="Version" default="" enable="false"/>
+    <setting type="sep"/>
     <setting label="Manage slots..." type="action" action="RunScript(special://home/addons/service.engage/script.py,manage_slots)" option="close"/>
     <setting type="sep"/>
     <setting id="debug" type="bool" label="Enable debug logging" default="false"/>

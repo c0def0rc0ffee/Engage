@@ -6,6 +6,7 @@ deliberately avoided, it renders a blank window on some skins.)
 """
 
 import xbmc
+import xbmcaddon
 import xbmcgui
 
 from resources.lib import slots as store
@@ -16,6 +17,15 @@ DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
 
 def _log(msg, level=xbmc.LOGINFO):
     xbmc.log('Engage manager: {}'.format(msg), level)
+
+
+def _version():
+    """'v1.10.0', or '' if Kodi won't tell us (the heading still reads fine)."""
+    try:
+        version = xbmcaddon.Addon('service.engage').getAddonInfo('version')
+        return 'v{}'.format(version) if version else ''
+    except Exception:
+        return ''
 
 
 def _notify(message, icon=xbmcgui.NOTIFICATION_INFO, duration=4000):
@@ -107,7 +117,8 @@ def manage_slots():
         items.append('+ Add movie sequence...')
         items.append('+ Add binge order (crossover)...')
         items.append('[COLOR cyan]Backup / Restore...[/COLOR]')
-        idx = xbmcgui.Dialog().select('Engage, Slots', items)
+        heading = ' '.join(p for p in ('Engage', _version()) if p)
+        idx = xbmcgui.Dialog().select('{}, Slots'.format(heading), items)
         if idx < 0:
             return
         if idx == len(slots):

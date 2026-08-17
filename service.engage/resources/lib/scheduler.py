@@ -85,9 +85,11 @@ class EngageScheduler:
         self.cancelled = {}
         self.snoozed = {}
         self._warned_misconfig = set()
-        # When the user picks "Queue Next" we hold the (slot, key) here and
-        # the player monitor fires it when current playback ends.
-        self.queued_next = None
+        # When the user picks "Queue Next" we append the (slot, key) here and
+        # the player monitor fires the head of the list when current playback
+        # ends. A list, not a single item, so a second queued slot waits its
+        # turn behind the first instead of replacing it.
+        self.queued_next = []
         # When the user picks "Stop & Resume After" we stash the interrupted
         # item here; _resume_armed gates resuming until the slot itself ends.
         self.resume_after = None
@@ -422,18 +424,29 @@ class EngageScheduler:
             self.snoozed[key] = now + timedelta(minutes=snooze_minutes)
             self._log('Slot {} snoozed for {} minutes'.format(slot.index + 1, snooze_minutes))
         elif action == 'queue':
+            if any(k == key for _, k in self.queued_next):
+                self._log('Slot {} already queued, ignoring'.format(slot.index + 1))
+                return
+            # Always join the back of the queue, so a second (or third) queued
+            # slot waits its turn instead of displacing the one before it.
+            self.queued_next.append((slot, key))
+            place = len(self.queued_next)
             if xbmc.Player().isPlaying():
-                self.queued_next = (slot, key)
+                if place == 1:
+                    message = '{} queued, starts when current playback ends.'.format(slot.label)
+                else:
+                    message = '{} queued, number {} in line.'.format(slot.label, place)
                 xbmcgui.Dialog().notification(
-                    'Engage',
-                    '{} queued, starts when current playback ends.'.format(slot.label),
-                    xbmcgui.NOTIFICATION_INFO, 5000
+                    'Engage', message, xbmcgui.NOTIFICATION_INFO, 5000
                 )
-                self._log('Slot {} queued for after current playback'.format(slot.index + 1))
+                self._log('Slot {} queued at position {} for after current playback'.format(
+                    slot.index + 1, place))
             else:
-                self._log('Queue Next chosen but nothing is playing, opening now')
-                self._play_slot(slot)
-                self.triggered[key] = True
+                # Nothing is playing, so no playback-end event is coming to
+                # drain the queue. Start the head of it now, which is this slot
+                # unless earlier ones are still waiting; they keep their place.
+                self._log('Queue Next chosen but nothing is playing, starting the queue now')
+                self._start_next_queued()
         elif action == 'stop_requeue':
             self._stop_and_requeue(slot, key)
         elif action == 'cancel':
@@ -534,12 +547,18 @@ class EngageScheduler:
             threading.Thread(target=self._resume_playback, args=(info,), daemon=True).start()
             return
 
-        if self.queued_next:
-            slot, key = self.queued_next
-            self.queued_next = None
-            self._log('Playback ended, firing queued slot {}'.format(slot.index + 1))
-            self._play_slot(slot)
-            self.triggered[key] = True
+        self._start_next_queued()
+
+    def _start_next_queued(self):
+        """Play the slot at the front of the queue, if there is one. The rest
+        keep their order and fire as each playback in turn ends."""
+        if not self.queued_next:
+            return
+        slot, key = self.queued_next.pop(0)
+        self._log('Firing queued slot {} ({} still waiting)'.format(
+            slot.index + 1, len(self.queued_next)))
+        self._play_slot(slot)
+        self.triggered[key] = True
 
     def _resume_playback(self, info):
         """Resume a previously-interrupted item, seeking back to its position.
