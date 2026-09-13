@@ -1,8 +1,12 @@
-"""JSON-backed slot store for Engage.
-
+"""
+<summary>
+JSON-backed slot store for Engage.
+</summary>
+<remarks>
 Slots live in addon_data/service.engage/slots.json instead of settings.xml,
 so the user can add/remove any number of them at runtime. One-time migration
 pulls any previously configured slotN_* settings across.
+</remarks>
 """
 
 import json

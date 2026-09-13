@@ -1,11 +1,15 @@
-"""Custom Engage banner prompt, slim top-of-screen WindowXMLDialog with live
+"""
+<summary>
+Custom Engage banner prompt, slim top-of-screen WindowXMLDialog with live
 countdown and buttons: Start Now, Snooze, Queue Next, Stop & Resume After,
 Cancel. Queue Next and Stop & Resume After only appear when something is
 already playing.
-
+</summary>
+<remarks>
 When the countdown reaches 0 with no user input, the banner resolves to the
 slot's own timeout action (Queue Next by default, see slots.py). The user can
 press any button before then to decide it themselves.
+</remarks>
 """
 
 import threading

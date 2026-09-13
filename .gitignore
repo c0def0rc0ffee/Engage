@@ -31,3 +31,50 @@ deploy_log.txt
 *.7z
 *.log
 *.tmp
+
+# Added 12/09/2026 (Linux packaging sweep)
+# Internal ops docs and local only leftovers, never published
+/Packaging.md
+/PROJECT_NOTES.md
+/.review/
+/build.conf
+/release-mirror.conf
+/deploy_to_programfiles.ps1
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Secrets, both cases because matching is case sensitive. Nothing secret
+# lives in this tree; the patterns stop one being added by accident.
+.env
+.env.*
+*credential*
+*CREDENTIAL*
+*Credential*
+*password*
+*PASSWORD*
+*Password*
+*secret*
+*SECRET*
+*Secret*
+*token*
+*TOKEN*
+*Token*
+*cred*
+*CRED*
+*sftp*
+*SFTP*
+*ftp*
+*FTP*
+*.pem
+*.key
+*.pfx
+id_rsa*
+connection.txt
+*config.local*
+*.bak
+
+# Dev only files inside the add-on folder, dropped from both zips by build-zip.sh
+/service.engage/**/test.py
+/service.engage/**/*_test.py
+/service.engage/**/test_*.py

@@ -1,3 +1,14 @@
+"""
+<summary>
+Service entry point, started by Kodi at login and left running.
+</summary>
+<remarks>
+Everything the add-on actually does lives in the scheduler; this file exists
+to put the add-on root on sys.path, publish the version into the read-only
+settings field, and hand control over. A failure publishing the version is
+logged and swallowed, because it must never stop the service starting.
+</remarks>
+"""
 import sys
 import traceback
 

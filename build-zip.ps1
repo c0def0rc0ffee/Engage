@@ -1,3 +1,4 @@
+# SUPERSEDED on 12/09/2026 by build-zip.sh in this folder (Linux build). Kept for reference only, do not run.
 # Builds both release zips straight from the project root, plus the runnable
 # App copy:
 #   Engage Dist\service.engage-<version>.zip  - installable Kodi add-on zip
@@ -23,7 +24,7 @@ $version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 # Refuse to build if they have drifted apart.
 $addonXml = [xml](Get-Content (Join-Path $root 'service.engage\addon.xml'))
 if ($addonXml.addon.version -ne $version) {
-    throw "VERSION ($version) != addon.xml ($($addonXml.addon.version)) - update both before building."
+    throw "VERSION ($version) != addon.xml ($($addonXml.addon.version)). Update both before building."
 }
 
 $distDir = Join-Path $root 'Engage Dist'
@@ -74,7 +75,7 @@ New-ForwardSlashZip -SourceDir $distStage `
     -RootEntryName 'service.engage'
 
 # App copy: exact mirror of the Dist zip contents.
-# /MIR removes anything not in the stage - never hand-edit this folder.
+# /MIR removes anything not in the stage, so never hand-edit this folder.
 robocopy $distStage (Join-Path $appDir 'service.engage') /MIR /NFL /NDL /NJH | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed mirroring App (exit $LASTEXITCODE)" }
 Write-Output "Mirrored: $appDir\service.engage"

@@ -1,3 +1,15 @@
+"""
+<summary>
+Entry point for the Manage slots dialog, launched by RunScript from a
+favourite or a keymap.
+</summary>
+<remarks>
+Kodi can launch a script by path or by add-on id, and only one of those puts
+the add-on root on sys.path. The root is therefore added by hand before the
+first resources.lib import, which is why that import sits below the code
+rather than at the top of the file.
+</remarks>
+"""
 import os
 import sys
 import traceback

@@ -1,3 +1,14 @@
+"""
+<summary>
+Reads Kodi's favourites.xml and offers the video entries as slot targets.
+</summary>
+<remarks>
+Kodi keeps favourites of every kind in one file, so the video ones have to be
+picked out by inspection: the file extension, the window the entry opens, and
+hints in the path. The heuristics are deliberately generous, because a missing
+favourite is more annoying than an music entry that appears in the list.
+</remarks>
+"""
 import json
 import xml.etree.ElementTree as ET
 

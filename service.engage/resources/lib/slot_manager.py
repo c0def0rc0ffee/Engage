@@ -1,8 +1,12 @@
-"""Dialog-driven slot management UI for Engage.
-
+"""
+<summary>
+Dialog-driven slot management UI for Engage.
+</summary>
+<remarks>
 Everything is built from Kodi's native dialogs (select, input, yesno) so it
 works equally well with a remote, keyboard, or touch. (Dialog().numeric is
 deliberately avoided, it renders a blank window on some skins.)
+</remarks>
 """
 
 import xbmc

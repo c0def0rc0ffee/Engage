@@ -7,7 +7,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $root 'deploy_log.txt'
 try {
     $src = Join-Path $root 'Engage App\service.engage'
-    if (-not (Test-Path $src)) { throw "Engage App\service.engage not found - run build-zip.ps1 first." }
+    if (-not (Test-Path $src)) { throw "Engage App\service.engage not found. Run build-zip.ps1 first." }
     Copy-Item -Recurse -Force $src 'C:\Program Files\Kodi\addons\'
     "OK $(Get-Date)" | Out-File -Encoding utf8 $log
     exit 0

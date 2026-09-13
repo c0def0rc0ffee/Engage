@@ -1,3 +1,16 @@
+"""
+<summary>
+The scheduler proper: decides when a slot is due and puts the prompt on
+screen.
+</summary>
+<remarks>
+Slots are stored as JSON by slots.py and wrapped by the Slot class here.
+Two timings matter. STARTUP_REST_SECONDS holds the first prompt back until
+Kodi has settled after login, because a dialog raised mid-startup is dismissed
+by the skin before anyone sees it. SNOOZE_MINUTES is how long a declined
+prompt stays quiet.
+</remarks>
+"""
 import json
 import re
 import time
