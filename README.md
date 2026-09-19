@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app_engage_logo.png" alt="Engage" width="160">
+<img src="service.engage/resources/icon.png" alt="Engage" width="160">
 
 # Engage
 
@@ -70,6 +70,8 @@ Favourites and library.
 3. **Add-ons → Install from zip file** → pick the downloaded zip.
 4. That's it, Engage starts automatically and runs every time Kodi launches.
 
+Or install the [DeliciousCoffee repository](https://github.com/c0def0rc0ffee/DeliciousCoffee) once and Kodi installs and updates it for you.
+
 > Upgrading? Installing a newer zip replaces the old one. Your slots and settings
 > are kept safe in `userdata` and carry over untouched.
 
@@ -98,10 +100,13 @@ Configure**) and choose **Manage slots…**
 
 ## For developers
 
-`build-zip.ps1` reads the version from `VERSION` (kept in sync with
-`service.engage/addon.xml`) and produces an installable zip in `Engage Dist/`
-(with forward-slash paths so Kodi accepts it), a source zip in `Engage Git/`,
-and a runnable copy of the add-on in `Engage App/`.
+`build-zip.sh` reads the version from `VERSION` (kept in sync with
+`service.engage/addon.xml`), runs the add-on checks in `tests/check_addon.py`,
+and produces an installable zip in `Engage Dist/` (forward-slash paths and a
+directory entry for the add-on folder, so Kodi on every platform accepts it),
+a source zip in `Engage Git/`, and a runnable copy of the add-on in
+`Engage App/`. `build-zip.ps1` is the superseded Windows script, kept for
+reference and no longer run.
 
 ```
 service.engage/
