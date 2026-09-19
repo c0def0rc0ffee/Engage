@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  <summary>
+  Add-on manifest for Engage: id, version and provider, the xbmc.python
+  dependency, the background service (service.py, started at login) and the
+  script entry point (script.py), plus the store metadata: summary,
+  description, platform, licence and icon.
+  </summary>
+-->
+<addon id="service.engage"
+       name="Engage"
+       version="1.10.2"
+       provider-name="c0def0rc0ffee">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+  </requires>
+  <extension point="xbmc.service" library="service.py" start="login"/>
+  <extension point="xbmc.python.script" library="script.py">
+    <provides>executable</provides>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en">Personal watch schedule prompts for Kodi.</summary>
+    <description lang="en">A lightweight scheduler that lets you define custom weekly watch slots for TV shows, movies, folders, playlists, or favourites. Get prompted before your scheduled time and optionally auto-open the selected Kodi favourite.</description>
+    <platform>all</platform>
+    <license>GPL-2.0-or-later</license>
+    <assets>
+      <icon>resources/icon.png</icon>
+    </assets>
+  </extension>
+</addon>

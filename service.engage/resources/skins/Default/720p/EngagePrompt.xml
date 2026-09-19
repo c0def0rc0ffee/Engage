@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  <summary>
+  Skin for the Engage banner dialog: a slim strip across the top of the 720p
+  canvas with a poster, the show and episode lines, a live countdown and the
+  five buttons (Start Now, Snooze, Queue Next, Stop and Resume After, Cancel).
+  The text comes from window properties set by prompt.py, and the two
+  playback-only buttons are shown only while the canresume property is 1.
+  </summary>
+-->
+<window type="dialog">
+    <defaultcontrol always="true">9001</defaultcontrol>
+    <animation effect="slide" start="0,-140" end="0,0" time="300">WindowOpen</animation>
+    <animation effect="slide" start="0,0" end="0,-140" time="300">WindowClose</animation>
+    <controls>
+
+        <!-- Banner background, 100px tall -->
+        <control type="image">
+            <left>0</left>
+            <top>0</top>
+            <width>1280</width>
+            <height>100</height>
+            <texture colordiffuse="EE1A1A2E">white.png</texture>
+        </control>
+
+        <!-- Cyan accent strip below -->
+        <control type="image">
+            <left>0</left>
+            <top>100</top>
+            <width>1280</width>
+            <height>3</height>
+            <texture colordiffuse="FF00BCD4">white.png</texture>
+        </control>
+
+        <!-- Poster / thumbnail, portrait, hangs below the banner -->
+        <control type="image">
+            <left>20</left>
+            <top>6</top>
+            <width>88</width>
+            <height>128</height>
+            <aspectratio aligny="top">keep</aspectratio>
+            <texture>$INFO[Window.Property(thumb)]</texture>
+        </control>
+
+        <!-- ENGAGE pill (top-left, right of poster) -->
+        <control type="label">
+            <left>124</left>
+            <top>8</top>
+            <width>200</width>
+            <height>18</height>
+            <font>font10</font>
+            <textcolor>FF00BCD4</textcolor>
+            <label>ENGAGE</label>
+        </control>
+
+        <!-- Show / favourite name -->
+        <control type="label">
+            <left>124</left>
+            <top>24</top>
+            <width>760</width>
+            <height>26</height>
+            <font>font14</font>
+            <textcolor>white</textcolor>
+            <label>$INFO[Window.Property(showname)]</label>
+        </control>
+
+        <!-- Episode line (under show name) -->
+        <control type="label">
+            <left>124</left>
+            <top>50</top>
+            <width>760</width>
+            <height>20</height>
+            <font>font12</font>
+            <textcolor>FFCCCCCC</textcolor>
+            <label>$INFO[Window.Property(episode)]</label>
+        </control>
+
+        <!-- Countdown (top-right) -->
+        <control type="label">
+            <left>900</left>
+            <top>10</top>
+            <width>364</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FFFFEB3B</textcolor>
+            <align>right</align>
+            <label>$INFO[Window.Property(countdown)]</label>
+        </control>
+
+        <!-- Button row (right of poster, centred) -->
+        <control type="grouplist" id="9000">
+            <left>124</left>
+            <top>66</top>
+            <width>1140</width>
+            <height>30</height>
+            <orientation>horizontal</orientation>
+            <itemgap>8</itemgap>
+            <align>center</align>
+
+            <control type="button" id="9001">
+                <width>220</width>
+                <height>30</height>
+                <label>[B]Start Now[/B]</label>
+                <font>font12</font>
+                <textcolor>white</textcolor>
+                <focusedcolor>black</focusedcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <texturefocus colordiffuse="FF00BCD4">white.png</texturefocus>
+                <texturenofocus colordiffuse="55FFFFFF">white.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9002">
+                <width>220</width>
+                <height>30</height>
+                <label>Snooze...</label>
+                <font>font12</font>
+                <textcolor>white</textcolor>
+                <focusedcolor>black</focusedcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <texturefocus colordiffuse="FF00BCD4">white.png</texturefocus>
+                <texturenofocus colordiffuse="55FFFFFF">white.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9003">
+                <visible>String.IsEqual(Window.Property(canresume),1)</visible>
+                <width>220</width>
+                <height>30</height>
+                <label>Queue Next</label>
+                <font>font12</font>
+                <textcolor>white</textcolor>
+                <focusedcolor>black</focusedcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <texturefocus colordiffuse="FF00BCD4">white.png</texturefocus>
+                <texturenofocus colordiffuse="55FFFFFF">white.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9005">
+                <visible>String.IsEqual(Window.Property(canresume),1)</visible>
+                <width>220</width>
+                <height>30</height>
+                <label>Stop &amp; Resume After</label>
+                <font>font12</font>
+                <textcolor>white</textcolor>
+                <focusedcolor>black</focusedcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <texturefocus colordiffuse="FF00BCD4">white.png</texturefocus>
+                <texturenofocus colordiffuse="55FFFFFF">white.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9004">
+                <width>220</width>
+                <height>30</height>
+                <label>Cancel</label>
+                <font>font12</font>
+                <textcolor>white</textcolor>
+                <focusedcolor>black</focusedcolor>
+                <align>center</align>
+                <aligny>center</aligny>
+                <texturefocus colordiffuse="FFE91E63">white.png</texturefocus>
+                <texturenofocus colordiffuse="55FFFFFF">white.png</texturenofocus>
+            </control>
+
+        </control>
+
+    </controls>
+</window>

@@ -1,0 +1,79 @@
+# Local release tooling and notes
+/publish-github.sh
+/push-source.sh
+/publish.conf
+/GITHUB-RELEASE-GUIDE.md
+/.publish-allow
+/Github repository
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Synology NAS metadata
+@eaDir/
+
+# Local deploy artefacts
+deploy_log.txt
+
+# Convention output folders (zips distributed via GitHub Releases instead)
+/Engage Dist/
+/Engage Git/
+/Engage App/
+
+# Local editor and tooling state (any dot folder except .github)
+.*/
+!.github/
+
+# Archives, logs, temp files
+*.zip
+*.7z
+*.log
+*.tmp
+
+# Added 12/09/2026 (Linux packaging sweep)
+# Internal ops docs and local only leftovers, never published
+/PROJECT_NOTES.md
+/.review/
+/build.conf
+/release-mirror.conf
+/deploy_to_programfiles.ps1
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Secrets, both cases because matching is case sensitive. Nothing secret
+# lives in this tree; the patterns stop one being added by accident.
+.env
+.env.*
+*credential*
+*CREDENTIAL*
+*Credential*
+*password*
+*PASSWORD*
+*Password*
+*secret*
+*SECRET*
+*Secret*
+*token*
+*TOKEN*
+*Token*
+*cred*
+*CRED*
+*sftp*
+*SFTP*
+*ftp*
+*FTP*
+*.pem
+*.key
+*.pfx
+id_rsa*
+connection.txt
+*config.local*
+*.bak
+
+# Dev only files inside the add-on folder, dropped from both zips by build-zip.sh
+/service.engage/**/test.py
+/service.engage/**/*_test.py
+/service.engage/**/test_*.py
