@@ -8,7 +8,9 @@ Slots are stored as JSON by slots.py and wrapped by the Slot class here.
 Two timings matter. STARTUP_REST_SECONDS holds the first prompt back until
 Kodi has settled after login, because a dialog raised mid-startup is dismissed
 by the skin before anyone sees it. SNOOZE_MINUTES is how long a declined
-prompt stays quiet.
+prompt stays quiet. A third, the recent watch window, is a user setting: a
+slot whose show was played within that many hours is skipped for the day, so
+watching early does not earn a reminder for what was just watched.
 </remarks>
 """
 import json
@@ -24,6 +26,34 @@ ADDON_ID = 'service.engage'
 DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 SNOOZE_MINUTES = 5
 STARTUP_REST_SECONDS = 20  # let Kodi fully settle at login before the first prompt
+# Used only when the recent_watch_hours setting cannot be read. Matches the
+# default declared in resources/settings.xml.
+RECENT_WATCH_FALLBACK_HOURS = 4
+
+
+def parse_kodi_datetime(text):
+    """
+    <summary>
+    Turn a Kodi library timestamp such as '2026-09-27 21:24:27' into a datetime.
+    </summary>
+    <param name="text">The lastplayed string JSON-RPC returned; empty when never played.</param>
+    <returns>A naive local datetime, or None when the string is empty or malformed.</returns>
+    <remarks>
+    Kodi writes these stamps in local time, so they compare directly with
+    datetime.now(). Parsed by hand rather than with strptime for the reason
+    given on Slot.parsed_date: Kodi's embedded Python raises TypeError from
+    strptime when it is first called off the main thread.
+    </remarks>
+    """
+    if not text:
+        return None
+    try:
+        date_part, time_part = text.strip().split(' ')
+        year, month, day = (int(p) for p in date_part.split('-'))
+        hour, minute, second = (int(p) for p in time_part.split(':'))
+        return datetime(year, month, day, hour, minute, second)
+    except (ValueError, TypeError):
+        return None
 
 
 class Slot:
@@ -367,6 +397,26 @@ class EngageScheduler:
         path = fav.get('path') or ''
         for source in (wp, path):
             match = re.search(r'videodb://tvshows/titles/(\d+)', source, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _extract_movieid(self, fav):
+        """
+        <summary>
+        Pull the movieid out of a videodb://movies/titles/<id> favourite.
+        </summary>
+        <param name="fav">One favourite dict from Favourites.GetFavourites.</param>
+        <returns>The id as an int, or None when the favourite is not a library movie path.</returns>
+        <remarks>
+        A movie favourited from the library often stores its file path rather than a
+        videodb path, and those are not matched here; see _last_played_for_slot.
+        </remarks>
+        """
+        wp = fav.get('windowparameter') or ''
+        path = fav.get('path') or ''
+        for source in (wp, path):
+            match = re.search(r'videodb://movies/titles/(\d+)', source, re.IGNORECASE)
             if match:
                 return int(match.group(1))
         return None
@@ -807,6 +857,160 @@ class EngageScheduler:
                 xbmc.sleep(500)
         self._log('Resume seek did not stick after retries', xbmc.LOGWARNING)
 
+    def _recent_watch_hours(self):
+        """
+        <summary>
+        The 'skip a slot watched in the last N hours' setting, 0 meaning off.
+        </summary>
+        <returns>Hours as an int, never negative.</returns>
+        <remarks>
+        Read on every use so a change in the settings screen applies to the next tick
+        without a restart. A failed read falls back to RECENT_WATCH_FALLBACK_HOURS.
+        </remarks>
+        """
+        try:
+            hours = xbmcaddon.Addon(ADDON_ID).getSettingInt('recent_watch_hours')
+        except Exception:
+            hours = RECENT_WATCH_FALLBACK_HOURS
+        return max(0, int(hours))
+
+    def _watched_recently(self, slot, now):
+        """
+        <summary>
+        True when something this slot covers was played within the recent watch window,
+        meaning the slot has already been seen to and should stay quiet today.
+        </summary>
+        <param name="slot">The slot about to prompt or auto-play.</param>
+        <param name="now">The tick's current time.</param>
+        <returns>True to skip the slot for today, False to carry on as normal.</returns>
+        <remarks>
+        Relies on the library's lastplayed stamp, which Kodi writes when playback of a
+        library item stops, whether or not it ran to the end. Anything the library cannot
+        answer for (a folder, playlist, plugin or plain file favourite) counts as not
+        watched, so the banner still appears. A lookup failure is logged and treated the
+        same way: a missed skip costs one banner, a missed prompt costs the show.
+        </remarks>
+        """
+        hours = self._recent_watch_hours()
+        if hours <= 0:
+            return False
+        since = now - timedelta(hours=hours)
+        try:
+            last = self._last_played_for_slot(slot, since)
+        except Exception as e:
+            self._log('Slot {}: recent watch lookup failed, prompting anyway: {}'.format(
+                slot.index + 1, e), xbmc.LOGWARNING)
+            return False
+        if last is None or last < since:
+            return False
+        self._log('Slot {}: "{}" was played at {}, inside the {}h recent watch window, skipping today'.format(
+            slot.index + 1, slot.label, last.strftime('%H:%M on %d/%m/%Y'), hours))
+        return True
+
+    def _last_played_for_slot(self, slot, since):
+        """
+        <summary>
+        The most recent lastplayed stamp among the library items this slot covers.
+        </summary>
+        <param name="slot">The slot to look up.</param>
+        <param name="since">Start of the recent watch window. A sequence stops at the
+        first item stamped at or after it, because the caller only needs to know one
+        exists.</param>
+        <returns>A datetime, or None when nothing was ever played or the slot is not
+        something the library can answer for.</returns>
+        <remarks>
+        A sequence is checked item by item in list order. A TV show favourite looks at
+        every episode of the show, because the episode watched early is not the one the
+        banner would offer next. A movie favourite stored as a videodb path is looked up
+        by id. A favourite that is a folder, playlist, plugin or plain file path is not
+        covered and returns None.
+        </remarks>
+        """
+        if slot.kind == 'sequence':
+            return self._last_played_in_sequence(slot, since)
+        favs = self._get_favourites_raw()
+        fav = next((f for f in favs if f.get('title', '').lower() == slot.favourite.lower()), None)
+        if not fav:
+            return None
+        tvshowid = self._extract_tvshowid(fav)
+        if tvshowid is not None:
+            return self._last_played_in_show(tvshowid)
+        movieid = self._extract_movieid(fav)
+        if movieid is not None:
+            return self._last_played_of_item({'type': 'movie', 'id': movieid})
+        return None
+
+    def _last_played_in_show(self, tvshowid):
+        """
+        <summary>
+        The newest lastplayed stamp across every episode of a TV show.
+        </summary>
+        <param name="tvshowid">The library id of the show.</param>
+        <returns>A datetime, or None when no episode has been played.</returns>
+        <remarks>
+        Fetches every episode with only the lastplayed property and takes the maximum
+        here, rather than asking Kodi to sort, so the answer does not depend on how
+        unplayed episodes sort. Even a long running show is a few tens of kilobytes, and
+        this runs a handful of times a day per slot at most.
+        </remarks>
+        """
+        response = xbmc.executeJSONRPC(json.dumps({
+            'jsonrpc': '2.0', 'method': 'VideoLibrary.GetEpisodes',
+            'params': {'tvshowid': tvshowid, 'properties': ['lastplayed']},
+            'id': 1
+        }))
+        episodes = json.loads(response).get('result', {}).get('episodes', []) or []
+        stamps = [parse_kodi_datetime(e.get('lastplayed')) for e in episodes]
+        stamps = [s for s in stamps if s is not None]
+        return max(stamps) if stamps else None
+
+    def _last_played_of_item(self, item):
+        """
+        <summary>
+        The lastplayed stamp of one library movie or episode.
+        </summary>
+        <param name="item">A dict with 'type' ('movie' or 'episode') and the library 'id'.</param>
+        <returns>A datetime, or None when the item is missing from the library or unplayed.</returns>
+        """
+        if item.get('type') == 'episode':
+            method, id_key, result_key = 'VideoLibrary.GetEpisodeDetails', 'episodeid', 'episodedetails'
+        else:
+            method, id_key, result_key = 'VideoLibrary.GetMovieDetails', 'movieid', 'moviedetails'
+        response = xbmc.executeJSONRPC(json.dumps({
+            'jsonrpc': '2.0', 'method': method,
+            'params': {id_key: item['id'], 'properties': ['lastplayed']}, 'id': 1
+        }))
+        details = json.loads(response).get('result', {}).get(result_key) or {}
+        return parse_kodi_datetime(details.get('lastplayed'))
+
+    def _last_played_in_sequence(self, slot, since):
+        """
+        <summary>
+        The newest lastplayed stamp among a sequence's items, stopping at the first one
+        inside the window.
+        </summary>
+        <param name="slot">A sequence slot.</param>
+        <param name="since">Start of the recent watch window.</param>
+        <returns>A datetime, or None when no item has been played.</returns>
+        <remarks>
+        One JSON-RPC call per item until a hit, so a long binge order that has not been
+        touched costs one call per item. Items without an id are skipped, as they are
+        everywhere else.
+        </remarks>
+        """
+        newest = None
+        for entry in slot.items:
+            if not entry.get('id'):
+                continue
+            stamp = self._last_played_of_item(entry)
+            if stamp is None:
+                continue
+            if stamp >= since:
+                return stamp
+            if newest is None or stamp > newest:
+                newest = stamp
+        return newest
+
     def _handle_warning(self, slot, scheduled_dt):
         """
         <summary>
@@ -980,6 +1184,10 @@ class EngageScheduler:
         <summary>
         Evaluate a single slot against the current time.
         </summary>
+        <remarks>
+        A slot skipped because its show was watched recently is recorded in triggered,
+        the same tracker a played slot uses, so it stays quiet until the day rolls over.
+        </remarks>
         """
         key = self._today_key(slot)
 
@@ -991,10 +1199,22 @@ class EngageScheduler:
             return
 
         warning_dt = scheduled_dt - timedelta(minutes=slot.warning)
+        if now < warning_dt:
+            return  # nothing happens before the warning window opens
+
+        snooze_until = self.snoozed.get(key)
+
+        # Watched early? Then the slot is done for the day. The library is only
+        # asked when a banner or auto-play is about to happen: the first time
+        # the slot is reached today, or a snooze running out. Never on every
+        # tick once the banner has been answered.
+        if key not in self.warned or (snooze_until is not None and now >= snooze_until):
+            if self._watched_recently(slot, now):
+                self.triggered[key] = True
+                return
 
         # Handle snooze first, an expired snooze must re-prompt even if
         # we're now past scheduled_dt + 2min (snooze can outlast that window).
-        snooze_until = self.snoozed.get(key)
         if snooze_until is not None:
             if now < snooze_until:
                 self._debug('Slot {} snoozed until {}'.format(slot.index + 1, snooze_until.strftime('%H:%M')))

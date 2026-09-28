@@ -3,8 +3,8 @@
   <summary>
   Kodi settings definition for the add-on: one General category holding the
   read-only version field, the Manage slots action button, debug logging, the
-  poll interval, the catch-up window and its prompt cap, the one-shot test
-  mode and the favourites filter switch. Labels are plain text; the add-on
+  poll interval, the catch-up window and its prompt cap, the recent watch
+  window, the one-shot test mode and the favourites filter switch. Labels are plain text; the add-on
   ships no strings.po.
   </summary>
 -->
@@ -21,6 +21,7 @@
     <setting id="poll_interval" type="slider" label="Poll interval (seconds)" default="30" range="5,5,120" option="int"/>
     <setting id="catchup_hours" type="slider" label="Catch-up window for missed slots (hours, 0 = off)" default="6" range="0,1,12" option="int"/>
     <setting id="catchup_max_prompts" type="slider" label="Max times to show a missed-slot banner" default="3" range="1,1,10" option="int"/>
+    <setting id="recent_watch_hours" type="slider" label="Skip a slot watched in the last (hours, 0 = off)" default="4" range="0,1,24" option="int"/>
     <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
     <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
   </category>

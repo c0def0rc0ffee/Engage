@@ -272,7 +272,8 @@ def get_slot(slots, slot_id):
 # --- Backup / restore -------------------------------------------------------
 
 # General settings that are worth backing up alongside the slots.
-BACKUP_SETTING_IDS = ['debug', 'poll_interval', 'catchup_hours', 'show_all_favourites']
+BACKUP_SETTING_IDS = ['debug', 'poll_interval', 'catchup_hours', 'recent_watch_hours',
+                      'show_all_favourites']
 
 
 def build_backup():

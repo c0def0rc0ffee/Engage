@@ -57,6 +57,9 @@ Favourites and library.
 - 🌙 **Catch-up window**, had Kodi switched off when a show was due? Turn it on
   within a configurable window (up to 12 h) and Engage still prompts you. Leave
   it off for a week and it stays quiet, no pile-up of stale prompts.
+- ✅ **Watched it early?** If you've played the show within the last few hours
+  (4 by default, adjustable, 0 turns it off) the slot stays quiet that day
+  instead of nagging you about what you just watched.
 - 🗂️ **Friendly slot manager**, add, edit, duplicate and delete slots through
   simple on-screen menus that work perfectly with a remote. No fiddly keypads.
 - 💾 **Backup & Restore**, save all your slots and settings to a JSON file and
@@ -94,6 +97,7 @@ Configure**) and choose **Manage slots…**
 | **Poll interval** | How often the scheduler checks, in seconds |
 | **Catch-up window** | Hours after a missed slot it will still prompt you (0 = off) |
 | **Max missed-slot banners** | How many times an overdue banner reappears before giving up |
+| **Skip a slot watched in the last** | Hours after you played a slot's show (or a sequence item) that it stays quiet, 0 = off |
 | **Show all favourites in pickers** | Off = only video/TV favourites are listed |
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
 | **Test mode** | Fire all enabled slots immediately (handy for testing) |
