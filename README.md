@@ -102,6 +102,27 @@ Configure**) and choose **Manage slots…**
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
 | **Test mode** | Fire all enabled slots immediately (handy for testing) |
 
+## For skinners
+
+While the service runs it publishes the next slot due as properties on Kodi's
+Home window, refreshed after every check, after a slot is saved and after a
+library change, and cleared when the service stops or no slot is enabled. Each
+property is written only when its value changes. The Functional skin (0.17.0
+and later) uses them for its "Coming up" block.
+
+| `Window(home).Property(...)` | What it holds | Example |
+|---|---|---|
+| `Engage.Next.Label` | The slot's label. Empty when nothing is coming up, so gate the block on this | `Voyager` |
+| `Engage.Next.Episode` | The next episode or film line, as on the banner. Empty for a plain favourite | `S03E04, Gravity` |
+| `Engage.Next.When` | When it is due, in words | `Tonight 19:00`, `Tomorrow 19:00`, `Thursday 19:00`, `Thursday 22/10/2026 19:00` |
+| `Engage.Next.Day` | The weekday | `Thursday` |
+| `Engage.Next.Date` | The date, `dd/mm/yyyy` | `15/10/2026` |
+| `Engage.Next.Time` | The time, `HH:MM` | `19:00` |
+| `Engage.Next.Thumb` | Poster or thumbnail path, may be empty | |
+| `Engage.Next.SlotId` | The slot's id | `3` |
+| `Engage.Next.State` | `upcoming`, `warning`, `snoozed` or `overdue` | `upcoming` |
+| `Engage.Next.Count` | How many slots are enabled | `4` |
+
 ## For developers
 
 `build-zip.sh` reads the version from `VERSION` (kept in sync with

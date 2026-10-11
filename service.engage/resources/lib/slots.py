@@ -19,6 +19,13 @@ import xbmcvfs
 ADDON_ID = 'service.engage'
 DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
+# Message save_slots broadcasts with NotifyAll once slots.json is on disk. The
+# Manage slots dialog runs in its own interpreter, so this is how the running
+# service learns that a slot changed and republishes the next slot for skins
+# (scheduler.py). Kodi delivers it to Monitor.onNotification as
+# method 'Other.' + this string with ADDON_ID as the sender.
+SLOTS_SAVED_MESSAGE = 'slots_saved'
+
 # What a slot does when the banner's countdown reaches zero and nobody has
 # touched it. Same identifiers the banner's buttons return, so the scheduler
 # handles a timed-out banner through exactly the same path as a button press.
@@ -246,8 +253,17 @@ def load_slots():
 def save_slots(slots):
     """
     <summary>
-    Atomically write the slot list.
+    Atomically write the slot list, then tell the running service about it.
     </summary>
+    <param name="slots">The full list of slot dicts to persist.</param>
+    <remarks>
+    The write goes to a .tmp file first and is renamed over slots.json, so a
+    crash mid-write leaves the old file intact. Once the rename has landed the
+    save is announced with NotifyAll so the service, which runs in a separate
+    interpreter, can refresh the Home window properties skins read. Every save
+    path (add, edit, duplicate, delete, restore) comes through here, which is
+    why the announcement lives in the store and not in the dialog code.
+    </remarks>
     """
     payload = {'version': 1, 'slots': slots}
     path = _file_path()
@@ -255,6 +271,25 @@ def save_slots(slots):
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
     os.replace(tmp, path)
+    _announce_saved()
+
+
+def _announce_saved():
+    """
+    <summary>
+    Broadcast SLOTS_SAVED_MESSAGE to every Kodi announcement listener.
+    </summary>
+    <remarks>
+    Best effort: the save has already succeeded, so a failure here is logged
+    and swallowed. When the service is not running nobody listens and the
+    message is simply dropped; the service reads slots.json afresh on every
+    tick anyway, so nothing is lost.
+    </remarks>
+    """
+    try:
+        xbmc.executebuiltin('NotifyAll({},{})'.format(ADDON_ID, SLOTS_SAVED_MESSAGE))
+    except Exception as e:
+        _log('could not announce the save: {}'.format(e), xbmc.LOGWARNING)
 
 
 def get_slot(slots, slot_id):
