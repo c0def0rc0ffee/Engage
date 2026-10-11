@@ -11,16 +11,23 @@ by the skin before anyone sees it. SNOOZE_MINUTES is how long a declined
 prompt stays quiet. A third, the recent watch window, is a user setting: a
 slot whose show was played within that many hours is skipped for the day, so
 watching early does not earn a reminder for what was just watched.
+
+The scheduler also publishes the next slot due as Engage.Next.* properties on
+Kodi's Home window (id 10000) so a skin can show a "Coming up" block. See
+_publish_next for the contract and the reasons behind its write discipline.
 </remarks>
 """
 import json
 import re
+import threading
 import time
 from datetime import datetime, timedelta
 
 import xbmc
 import xbmcaddon
 import xbmcgui
+
+from resources.lib.slots import SLOTS_SAVED_MESSAGE
 
 ADDON_ID = 'service.engage'
 DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -29,6 +36,73 @@ STARTUP_REST_SECONDS = 20  # let Kodi fully settle at login before the first pro
 # Used only when the recent_watch_hours setting cannot be read. Matches the
 # default declared in resources/settings.xml.
 RECENT_WATCH_FALLBACK_HOURS = 4
+# Used only when the catchup_hours setting cannot be read. Matches the default
+# declared in resources/settings.xml and the fallback in _process_slot.
+CATCHUP_FALLBACK_HOURS = 6
+
+# The next slot is published for skins as properties on Kodi's Home window,
+# Window(10000), named NEXT_PROPERTY_PREFIX + one of NEXT_PROPERTY_NAMES. The
+# Functional skin reads Label, Episode and When and hides its block while
+# Label is empty; the rest are extras for any skin that wants them. Label is
+# deliberately last in the tuple: it is written last when a slot is published
+# and cleared first when none is, so a skin keyed on Label never shows a new
+# label over the previous slot's other lines.
+HOME_WINDOW_ID = 10000
+NEXT_PROPERTY_PREFIX = 'Engage.Next.'
+NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
+                       'SlotId', 'State', 'Count', 'Label')
+# How far ahead the next occurrence is looked for. Today plus seven days, so a
+# weekly slot already dealt with today still has a next occurrence (the same
+# weekday next week) rather than vanishing from the skin for the evening.
+NEXT_LOOKAHEAD_DAYS = 7
+# How long an occurrence whose time has passed still counts as next when the
+# catch-up window is off. Matches the two minute grace in _process_slot.
+NEXT_GRACE_MINUTES = 2
+
+
+def occurrence_key(slot, due):
+    """
+    <summary>
+    The tracker key for one occurrence of a slot: its date, id and scheduled time.
+    </summary>
+    <param name="slot">The Slot the occurrence belongs to.</param>
+    <param name="due">The datetime of the occurrence; only its date is used.</param>
+    <returns>A string of the form 'YYYY-MM-DD-<id>-HHMM'.</returns>
+    <remarks>
+    This is the shape every per-day tracker (triggered, warned, cancelled,
+    snoozed) and catchup.json use, so the next-slot publisher can ask whether
+    a future occurrence has already been dealt with. The time is part of the
+    key so editing a slot's time re-arms it the same day.
+    </remarks>
+    """
+    return '{}-{}-{:02d}{:02d}'.format(due.strftime('%Y-%m-%d'), slot.id, slot.hour, slot.minute)
+
+
+def when_label(due, now):
+    """
+    <summary>
+    Say when an occurrence is due in words, for the skin's "Coming up" block.
+    </summary>
+    <param name="due">The occurrence's datetime.</param>
+    <param name="now">The current time; only its date matters.</param>
+    <returns>'Tonight HH:MM' for today, 'Tomorrow HH:MM', then 'Weekday HH:MM'
+    within the week and 'Weekday dd/mm/yyyy HH:MM' beyond that.</returns>
+    <remarks>
+    Today reads 'Tonight' whatever the hour, which is what the skin asked for.
+    The dated form starts at seven days ahead, where a bare weekday would
+    otherwise be ambiguous with the same weekday this week. Dates are en-GB.
+    </remarks>
+    """
+    time_text = '{:02d}:{:02d}'.format(due.hour, due.minute)
+    days_ahead = (due.date() - now.date()).days
+    if days_ahead <= 0:
+        return 'Tonight {}'.format(time_text)
+    if days_ahead == 1:
+        return 'Tomorrow {}'.format(time_text)
+    weekday = DAY_NAMES[due.weekday()]
+    if days_ahead < 7:
+        return '{} {}'.format(weekday, time_text)
+    return '{} {:02d}/{:02d}/{:04d} {}'.format(weekday, due.day, due.month, due.year, time_text)
 
 
 def parse_kodi_datetime(text):
@@ -163,12 +237,13 @@ class EngageScheduler:
         monitor that reports playback events back to this object.
         </summary>
         <remarks>
-        The monitor is stored on self._player and never read again: it is kept only so
-        the xbmc.Player subclass stays alive, and with it its callbacks, for the life of
-        the service.
+        The player monitor is stored on self._player and never read again: it is kept
+        only so the xbmc.Player subclass stays alive, and with it its callbacks, for the
+        life of the service. self.monitor is the service's own xbmc.Monitor, used for the
+        abort wait and for the notifications that refresh the published next slot.
         </remarks>
         """
-        self.monitor = xbmc.Monitor()
+        self.monitor = _EngageMonitor(self)
         self.triggered = {}
         self.warned = {}
         self.cancelled = {}
@@ -184,6 +259,17 @@ class EngageScheduler:
         self.resume_after = None
         self._resume_armed = False
         self._player = _EngagePlayerMonitor(self)
+        # Next-slot publishing for skins. The cache holds each slot's episode
+        # line and poster, keyed by slot id, so the library is asked once per
+        # slot and again only after a library change or a slot save. The lock
+        # serialises publishes, which can come from the scheduler thread (every
+        # tick) and from notification threads (a save or a library update).
+        # Nothing is written to the Home window until _wait_for_gui has run:
+        # Home window writes during Kodi's start-up are implicated in a crash
+        # seen by the Functional skin's own service.
+        self._next_item_cache = {}
+        self._publish_lock = threading.Lock()
+        self._gui_ready = False
 
     def _log(self, msg, level=xbmc.LOGINFO):
         """
@@ -256,8 +342,7 @@ class EngageScheduler:
         today, important for testing and for genuine same-day reschedules.
         </summary>
         """
-        return '{}-{}-{:02d}{:02d}'.format(
-            datetime.now().strftime('%Y-%m-%d'), slot.id, slot.hour, slot.minute)
+        return occurrence_key(slot, datetime.now())
 
     def _get_scheduled_dt(self, slot):
         """
@@ -1026,18 +1111,10 @@ class EngageScheduler:
         from resources.lib.prompt import show_engage_prompt
         addon_path = xbmcaddon.Addon(ADDON_ID).getAddonInfo('path')
 
-        # Work out the sub-line + poster for the banner: next unwatched episode
-        # for a TV favourite, next unwatched item for a sequence, or the
-        # favourite's own thumbnail for a plain favourite.
-        thumb = ''
-        if slot.kind == 'sequence':
-            nxt = self._resolve_next_item(slot)
-            episode_label = nxt['label'] if nxt else 'All watched'
-            thumb = nxt.get('art', '') if nxt else ''
-        else:
-            episode = self._resolve_episode_info(slot)
-            episode_label = self._episode_label(episode)
-            thumb = self._episode_art(episode) if episode else self._favourite_thumb(slot.favourite)
+        # Work out the sub-line + poster for the banner, fresh from the library
+        # so the banner never offers an episode that was watched since the
+        # publisher last looked.
+        episode_label, thumb = self._describe_slot(slot)
 
         # Brief notification so the user knows something just popped.
         name = slot.label if not episode_label else '{} ({})'.format(slot.label, episode_label)
@@ -1060,6 +1137,294 @@ class EngageScheduler:
         self._log('Prompt for slot {} returned action={}, snooze={}m'.format(
             slot.index + 1, action, snooze_minutes))
         return action, snooze_minutes
+
+    def _describe_slot(self, slot):
+        """
+        <summary>
+        The episode line and poster for a slot: the next unwatched episode for a TV
+        favourite, the next unwatched item for a sequence, or the favourite's own
+        thumbnail for a plain favourite.
+        </summary>
+        <param name="slot">The slot to describe.</param>
+        <returns>A tuple (episode_label, thumb). episode_label is '' for a movie, folder
+        or other non-TV favourite and 'All watched' for a finished sequence; thumb may
+        be ''.</returns>
+        <remarks>
+        Always asks the library, one to three JSON-RPC calls. The banner calls it at
+        prompt time; the next-slot publisher calls it through _next_item_cached so the
+        skin line is formatted exactly like the banner's without querying every tick.
+        </remarks>
+        """
+        if slot.kind == 'sequence':
+            nxt = self._resolve_next_item(slot)
+            episode_label = nxt['label'] if nxt else 'All watched'
+            thumb = nxt.get('art', '') if nxt else ''
+        else:
+            episode = self._resolve_episode_info(slot)
+            episode_label = self._episode_label(episode)
+            thumb = self._episode_art(episode) if episode else self._favourite_thumb(slot.favourite)
+        return episode_label, thumb
+
+    def _next_item_cached(self, slot):
+        """
+        <summary>
+        _describe_slot with a per-slot cache, for the next-slot publisher.
+        </summary>
+        <param name="slot">The slot to describe.</param>
+        <returns>The same (episode_label, thumb) tuple _describe_slot returns.</returns>
+        <remarks>
+        The cache entry carries a signature of what the slot points at (kind, favourite,
+        sequence type and item ids), so an edited slot is re-resolved even if the save
+        notification that normally clears the cache was missed. A lookup failure is
+        logged and cached as an empty line rather than retried every tick; the next
+        library change or slot save clears it. The banner never uses this cache.
+        </remarks>
+        """
+        signature = (slot.kind, slot.favourite, slot.seq_type,
+                     tuple(entry.get('id') for entry in slot.items))
+        cached = self._next_item_cache.get(slot.id)
+        if cached is not None and cached[0] == signature:
+            return cached[1], cached[2]
+        try:
+            episode_label, thumb = self._describe_slot(slot)
+        except Exception as e:
+            self._log('Slot {}: next item lookup for the skin failed: {}'.format(
+                slot.index + 1, e), xbmc.LOGWARNING)
+            episode_label, thumb = '', ''
+        self._next_item_cache[slot.id] = (signature, episode_label, thumb)
+        return episode_label, thumb
+
+    def _catchup_hours(self):
+        """
+        <summary>
+        The catch-up window setting in hours, 0 meaning off.
+        </summary>
+        <returns>Hours as an int, never negative; CATCHUP_FALLBACK_HOURS when the
+        setting cannot be read.</returns>
+        """
+        try:
+            hours = xbmcaddon.Addon(ADDON_ID).getSettingInt('catchup_hours')
+        except Exception:
+            hours = CATCHUP_FALLBACK_HOURS
+        return max(0, int(hours))
+
+    def _next_occurrence(self, slot, now):
+        """
+        <summary>
+        The next occurrence of a slot that the scheduler has not yet dealt with.
+        </summary>
+        <param name="slot">An enabled slot.</param>
+        <param name="now">The current time.</param>
+        <returns>A tuple (due, key) with the occurrence's datetime and its tracker key,
+        or (None, None) when there is none within NEXT_LOOKAHEAD_DAYS.</returns>
+        <remarks>
+        Walks today and the next NEXT_LOOKAHEAD_DAYS days. A one off date slot occurs on
+        its date only; a weekly slot on each weekday in its list, at its hour and minute.
+        An invalid date string falls back to the weekly days, as _get_scheduled_dt does.
+        An occurrence is skipped when its key is in triggered or cancelled, so a slot
+        played, skipped as recently watched or cancelled today does not show as next.
+        An occurrence whose time has passed is still offered while the scheduler would
+        still prompt for it: within the catch-up window, or two minutes when that is
+        off. Beyond that it is gone for the day and the following occurrence is next.
+        </remarks>
+        """
+        date_only = slot.parsed_date()
+        weekdays = slot.day_indexes()
+        hours = self._catchup_hours()
+        if hours > 0:
+            live_for = timedelta(hours=hours)
+        else:
+            live_for = timedelta(minutes=NEXT_GRACE_MINUTES)
+        for offset in range(NEXT_LOOKAHEAD_DAYS + 1):
+            day = (now + timedelta(days=offset)).date()
+            if date_only is not None:
+                if day != date_only:
+                    continue
+            elif day.weekday() not in weekdays:
+                continue
+            due = datetime(day.year, day.month, day.day, slot.hour, slot.minute)
+            key = occurrence_key(slot, due)
+            if key in self.triggered or key in self.cancelled:
+                continue
+            if due < now and now > due + live_for:
+                continue
+            return due, key
+        return None, None
+
+    def _next_state(self, slot, due, key, now):
+        """
+        <summary>
+        Where an occurrence stands for the skin's State property.
+        </summary>
+        <param name="slot">The slot.</param>
+        <param name="due">The occurrence's datetime.</param>
+        <param name="key">Its tracker key.</param>
+        <param name="now">The current time.</param>
+        <returns>'snoozed' while a snooze is running, 'overdue' once the time has
+        passed, 'warning' inside the warning window, otherwise 'upcoming'.</returns>
+        """
+        if key in self.snoozed:
+            return 'snoozed'
+        if now > due:
+            return 'overdue'
+        if now >= due - timedelta(minutes=slot.warning):
+            return 'warning'
+        return 'upcoming'
+
+    def _publish_next(self, reason, slots=None):
+        """
+        <summary>
+        Publish the next slot due as Engage.Next.* properties on the Home window, or
+        clear them when no enabled slot has an occurrence coming up.
+        </summary>
+        <param name="reason">Why this publish is happening, for the log.</param>
+        <param name="slots">The enabled Slot list when the caller already has it; read
+        afresh from the store otherwise.</param>
+        <remarks>
+        Called at the end of every tick, after a slot save and after a library change.
+        Does nothing until _wait_for_gui has finished, so Kodi's start-up is never
+        touched. Among all enabled slots the earliest next occurrence wins, first in
+        list order on a tie. Label is the slot's label, Episode the banner's episode
+        line (empty for a non-TV favourite), When the words from when_label; Day, Date
+        (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and Count (enabled slots) are
+        extras. Each property is written only when its value differs from what the
+        window already holds, see _write_next_properties. Any failure is logged and
+        swallowed: the skin block is a convenience and must never cost a prompt.
+        </remarks>
+        """
+        if not self._gui_ready:
+            return
+        with self._publish_lock:
+            try:
+                now = datetime.now()
+                if slots is None:
+                    slots = self._reload_slots()
+                best = None
+                for slot in slots:
+                    due, key = self._next_occurrence(slot, now)
+                    if due is None:
+                        continue
+                    if best is None or due < best[0]:
+                        best = (due, key, slot)
+                if best is None:
+                    self._write_next_properties({}, reason)
+                    return
+                due, key, slot = best
+                episode_label, thumb = self._next_item_cached(slot)
+                self._write_next_properties({
+                    'Label': slot.label,
+                    'Episode': episode_label,
+                    'When': when_label(due, now),
+                    'Day': DAY_NAMES[due.weekday()],
+                    'Date': '{:02d}/{:02d}/{:04d}'.format(due.day, due.month, due.year),
+                    'Time': '{:02d}:{:02d}'.format(due.hour, due.minute),
+                    'Thumb': thumb,
+                    'SlotId': str(slot.id),
+                    'State': self._next_state(slot, due, key, now),
+                    'Count': str(len(slots)),
+                }, reason)
+            except Exception:
+                import traceback
+                self._log('Publishing the next slot failed:\n{}'.format(
+                    traceback.format_exc()), xbmc.LOGWARNING)
+
+    def _write_next_properties(self, values, reason):
+        """
+        <summary>
+        Bring the Engage.Next.* Home window properties in line with values, touching
+        only the ones that differ.
+        </summary>
+        <param name="values">Property name (without the prefix) to value. A missing or
+        empty value clears that property; an empty dict clears them all.</param>
+        <param name="reason">Why, for the log line.</param>
+        <remarks>
+        The window's current value is read back and compared before every write,
+        rather than trusting a cache, because bursts of redundant Home window writes
+        are implicated in a Kodi start-up crash seen by the Functional skin's own
+        service and this must stay quiet when nothing has changed. Properties are
+        written in NEXT_PROPERTY_NAMES order when publishing (Label last) and in reverse
+        when clearing (Label first), so the skin's block, keyed on Label, never shows a
+        half-updated set. A change to Label or When is logged at info, the rest at debug.
+        </remarks>
+        """
+        window = xbmcgui.Window(HOME_WINDOW_ID)
+        order = NEXT_PROPERTY_NAMES if values else tuple(reversed(NEXT_PROPERTY_NAMES))
+        changed = []
+        for name in order:
+            prop = NEXT_PROPERTY_PREFIX + name
+            value = values.get(name) or ''
+            if window.getProperty(prop) == value:
+                continue
+            if value:
+                window.setProperty(prop, value)
+            else:
+                window.clearProperty(prop)
+            changed.append(name)
+        if not changed:
+            return
+        summary = 'Next slot for skins ({}): {}'.format(
+            reason, ', '.join('{}={!r}'.format(n, values.get(n) or '') for n in changed))
+        if 'Label' in changed or 'When' in changed:
+            self._log(summary)
+        else:
+            self._debug(summary)
+
+    def _clear_next(self):
+        """
+        <summary>
+        Clear every Engage.Next.* property, for when the service stops.
+        </summary>
+        <remarks>
+        Runs whatever state the GUI is in, because a skin must not keep showing a slot
+        from a service that is no longer there. Failures are swallowed: Kodi may be
+        tearing down the GUI at the same time.
+        </remarks>
+        """
+        try:
+            with self._publish_lock:
+                self._write_next_properties({}, 'service stopping')
+        except Exception as e:
+            self._log('Could not clear the next slot properties: {}'.format(e), xbmc.LOGWARNING)
+
+    def _on_notification(self, sender, method, data):
+        """
+        <summary>
+        React to a Kodi announcement: a slot save from the Manage slots dialog, or a
+        video library change, both of which can move the next slot or its episode line.
+        </summary>
+        <param name="sender">Who announced it; ADDON_ID for the dialog's save.</param>
+        <param name="method">'Other.' + SLOTS_SAVED_MESSAGE for a save, or a
+        VideoLibrary.* method.</param>
+        <param name="data">The announcement's JSON payload as a string.</param>
+        <remarks>
+        Every handled event clears the episode cache. A save, a finished scan or clean,
+        and an OnUpdate carrying a playcount (an episode or film just marked watched)
+        republish straight away on a short-lived thread, so the announcer is not held
+        up and no GUI lock is taken from its thread. Other OnUpdate and OnRemove events
+        arrive once per item during a scan, so they only clear the cache and leave the
+        republish to the next tick.
+        </remarks>
+        """
+        if sender == ADDON_ID and method == 'Other.' + SLOTS_SAVED_MESSAGE:
+            self._next_item_cache.clear()
+            self._publish_async('slots saved')
+            return
+        if method in ('VideoLibrary.OnScanFinished', 'VideoLibrary.OnCleanFinished'):
+            self._next_item_cache.clear()
+            self._publish_async(method)
+        elif method in ('VideoLibrary.OnUpdate', 'VideoLibrary.OnRemove'):
+            self._next_item_cache.clear()
+            if method == 'VideoLibrary.OnUpdate' and '"playcount"' in (data or ''):
+                self._publish_async('watched state changed')
+
+    def _publish_async(self, reason):
+        """
+        <summary>
+        Run _publish_next on its own daemon thread.
+        </summary>
+        <param name="reason">Passed through to _publish_next.</param>
+        """
+        threading.Thread(target=self._publish_next, args=(reason,), daemon=True).start()
 
     def _check_test_mode(self):
         """
@@ -1116,6 +1481,8 @@ class EngageScheduler:
         # A solid rest so the skin, library and dialogs are fully ready.
         self._log('GUI is up, resting {}s before first check'.format(STARTUP_REST_SECONDS))
         self.monitor.waitForAbort(STARTUP_REST_SECONDS)
+        # Only now may the Home window be written to (see __init__).
+        self._gui_ready = True
 
     def run(self):
         """
@@ -1126,35 +1493,41 @@ class EngageScheduler:
         <remarks>
         poll_interval is read from settings on every pass, a value under 5 falling back to
         30. An exception inside a tick is logged with its traceback and the loop carries
-        on, because the service is expected to run for days between restarts.
+        on, because the service is expected to run for days between restarts. However
+        the loop ends, the Engage.Next.* Home window properties are cleared on the way
+        out so a skin does not keep showing a slot nobody is watching for.
         </remarks>
         """
         self._log('Scheduler loop starting')
         self._wait_for_gui()
 
-        while not self.monitor.abortRequested():
-            # Any error in a tick must never kill the service, log it and
-            # keep polling. A media centre can run for days between restarts.
-            poll_interval = 30
-            try:
-                addon = xbmcaddon.Addon(ADDON_ID)
-                poll_interval = addon.getSettingInt('poll_interval')
-                if poll_interval < 5:
-                    poll_interval = 30
-                self._tick()
-            except Exception:
-                import traceback
-                self._log('Scheduler tick failed:\n{}'.format(traceback.format_exc()), xbmc.LOGERROR)
+        try:
+            while not self.monitor.abortRequested():
+                # Any error in a tick must never kill the service, log it and
+                # keep polling. A media centre can run for days between restarts.
+                poll_interval = 30
+                try:
+                    addon = xbmcaddon.Addon(ADDON_ID)
+                    poll_interval = addon.getSettingInt('poll_interval')
+                    if poll_interval < 5:
+                        poll_interval = 30
+                    self._tick()
+                except Exception:
+                    import traceback
+                    self._log('Scheduler tick failed:\n{}'.format(traceback.format_exc()), xbmc.LOGERROR)
 
-            if self.monitor.waitForAbort(poll_interval):
-                break
+                if self.monitor.waitForAbort(poll_interval):
+                    break
+        finally:
+            self._clear_next()
 
         self._log('Scheduler loop ended')
 
     def _tick(self):
         """
         <summary>
-        One pass over all slots. Called every poll_interval seconds.
+        One pass over all slots, then a refresh of the published next slot. Called every
+        poll_interval seconds.
         </summary>
         """
         self._check_test_mode()
@@ -1178,6 +1551,9 @@ class EngageScheduler:
                 import traceback
                 self._log('Slot {} processing failed:\n{}'.format(
                     slot.index + 1, traceback.format_exc()), xbmc.LOGERROR)
+
+        # Last, so whatever this tick played, snoozed or cancelled is reflected.
+        self._publish_next('tick', slots)
 
     def _process_slot(self, slot, now):
         """
@@ -1339,3 +1715,38 @@ class _EngagePlayerMonitor(xbmc.Player):
         """
         self._scheduler._on_playback_ended()
 
+
+class _EngageMonitor(xbmc.Monitor):
+    """
+    <summary>
+    The service's xbmc.Monitor: the abort wait the loop sleeps on, plus the
+    notifications that refresh the next slot published for skins.
+    </summary>
+    <remarks>
+    Kodi calls onNotification on its own thread for every announcement, so the
+    work is handed to the scheduler, which decides what matters and republishes
+    off this thread. The Manage slots dialog's save arrives here as
+    'Other.' + SLOTS_SAVED_MESSAGE from ADDON_ID (see slots.save_slots).
+    </remarks>
+    """
+
+    def __init__(self, scheduler):
+        """
+        <summary>
+        Remember the scheduler the notifications are forwarded to.
+        </summary>
+        <param name="scheduler">The owning EngageScheduler.</param>
+        """
+        super().__init__()
+        self._scheduler = scheduler
+
+    def onNotification(self, sender, method, data):
+        """
+        <summary>
+        Kodi callback for every announcement; forwards to the scheduler's _on_notification.
+        </summary>
+        <param name="sender">The announcing component or add-on id.</param>
+        <param name="method">Flag and message, such as 'VideoLibrary.OnUpdate'.</param>
+        <param name="data">The payload as a JSON string.</param>
+        """
+        self._scheduler._on_notification(sender, method, data)
