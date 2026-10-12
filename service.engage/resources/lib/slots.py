@@ -54,6 +54,94 @@ TIMEOUT_ACTION_SHORT = {
 }
 
 
+# How a slot repeats. Weekly uses the 'days' list; monthly uses 'month_day';
+# yearly uses 'month' and 'month_day'. A one-shot 'date' overrides all three.
+# Slots saved before this setting existed carry no key and are weekly.
+REPEAT_WEEKLY = 'weekly'
+REPEAT_MONTHLY = 'monthly'
+REPEAT_YEARLY = 'yearly'
+DEFAULT_REPEAT = REPEAT_WEEKLY
+# Order here is the order the picker shows them in.
+REPEATS = [REPEAT_WEEKLY, REPEAT_MONTHLY, REPEAT_YEARLY]
+MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+               'August', 'September', 'October', 'November', 'December']
+
+
+def repeat_of(slot):
+    """
+    <summary>
+    How this slot repeats: 'weekly', 'monthly' or 'yearly'.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>One of REPEATS; an unknown or missing value gives DEFAULT_REPEAT.</returns>
+    """
+    repeat = (slot.get('repeat') or '').strip()
+    return repeat if repeat in REPEATS else DEFAULT_REPEAT
+
+
+def month_day_of(slot):
+    """
+    <summary>
+    The day of the month a monthly or yearly slot runs on, 1 to 31.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>The stored day, or 1 when it is missing or out of range.</returns>
+    <remarks>
+    The stored day is kept as chosen even when a month is shorter; the scheduler
+    moves it to that month's last day at run time (see last_day_of_month), so the
+    31st runs on the 30th in April and on the 31st again in May.
+    </remarks>
+    """
+    try:
+        day = int(slot.get('month_day') or 1)
+    except (ValueError, TypeError):
+        return 1
+    return day if 1 <= day <= 31 else 1
+
+
+def month_of(slot):
+    """
+    <summary>
+    The month a yearly slot runs in, 1 (January) to 12.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>The stored month, or 1 when it is missing or out of range.</returns>
+    """
+    try:
+        month = int(slot.get('month') or 1)
+    except (ValueError, TypeError):
+        return 1
+    return month if 1 <= month <= 12 else 1
+
+
+def last_day_of_month(year, month):
+    """
+    <summary>
+    The number of days in a month, leap years included.
+    </summary>
+    <param name="year">The year, needed for February.</param>
+    <param name="month">The month, 1 to 12.</param>
+    <returns>28 to 31.</returns>
+    """
+    import calendar
+    return calendar.monthrange(year, month)[1]
+
+
+def ordinal(n):
+    """
+    <summary>
+    A day number with its English suffix: 1st, 2nd, 3rd, 4th, 11th, 21st.
+    </summary>
+    <param name="n">A positive int.</param>
+    <returns>The number and suffix as one string.</returns>
+    """
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return '{}{}'.format(n, suffix)
+
+
 def timeout_action_of(slot):
     """
     <summary>
@@ -160,9 +248,12 @@ def new_slot(favourite='', day='Monday'):
         'id': 0,
         'enabled': True,
         'label': '',
-        'kind': 'favourite',   # 'favourite' or 'sequence'
+        'kind': 'favourite',   # 'favourite', 'sequence' or 'list'
         'favourite': favourite,
         'days': [day],         # one or more weekday names
+        'repeat': DEFAULT_REPEAT,  # 'weekly', 'monthly' or 'yearly'
+        'month_day': 1,        # monthly and yearly: day of the month
+        'month': 1,            # yearly: month, 1 to 12
         'date': '',
         'hour': 19,
         'minute': 0,
@@ -189,6 +280,29 @@ def new_sequence(label='', day='Monday', seq_type='movie'):
     s['label'] = label
     s['seq_type'] = seq_type
     s['items'] = []
+    return s
+
+
+def new_list_slot(list_name, mode, day='Monday'):
+    """
+    <summary>
+    Return a fresh slot that plays from one of the Functional skin's lists.
+    </summary>
+    <param name="list_name">The list's name as the skin shows it.</param>
+    <param name="mode">'next' for the first unwatched item in list order, 'random'
+    for a random unwatched one (see functional_lists.MODES).</param>
+    <param name="day">The first weekday it runs on.</param>
+    <returns>The slot dict, with an empty label so the list name is shown.</returns>
+    <remarks>
+    The list is referenced by name only; its items stay in the skin's lists.json
+    and are read at play time. Renaming or deleting the list in the skin leaves
+    the slot pointing at nothing, and the scheduler then skips it with a warning.
+    </remarks>
+    """
+    s = new_slot(day=day)
+    s['kind'] = 'list'
+    s['list_name'] = list_name
+    s['list_mode'] = mode
     return s
 
 

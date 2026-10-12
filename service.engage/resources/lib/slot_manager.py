@@ -13,6 +13,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 
+from resources.lib import functional_lists
 from resources.lib import slots as store
 from resources.lib.favourites_ui import _get_favourites, _maybe_filter_video
 
@@ -135,16 +136,17 @@ def _slot_line(slot):
     One-line summary for the slot list.
     </summary>
     """
-    if slot.get('kind') == 'sequence':
+    if slot.get('kind') == 'list':
+        name = '{} [list, {}]'.format(
+            slot.get('label') or slot.get('list_name') or '(no list)',
+            functional_lists.MODE_SHORT[functional_lists.mode_of(slot)])
+    elif slot.get('kind') == 'sequence':
         count = len(store.items_of(slot))
         noun = 'episodes' if slot.get('seq_type') == 'binge' else 'films'
         name = '{} [{} {}]'.format(slot.get('label') or 'Sequence', count, noun)
     else:
         name = slot.get('label') or slot.get('favourite') or '(no favourite)'
-    if slot.get('date'):
-        when = slot['date']
-    else:
-        when = _days_abbrev(store.days_of(slot))
+    when = _schedule_text(slot)
     line = '{}, {} {:02d}:{:02d}'.format(name, when, slot.get('hour', 0), slot.get('minute', 0))
     if not slot.get('enabled'):
         line += '  [disabled]'
@@ -163,6 +165,7 @@ def manage_slots():
         items.append('+ Add new slot (single show/movie)...')
         items.append('+ Add movie sequence...')
         items.append('+ Add binge order (crossover)...')
+        items.append('+ Add from a Functional skin list...')
         items.append('[COLOR cyan]Backup / Restore...[/COLOR]')
         heading = ' '.join(p for p in ('Engage', _version()) if p)
         idx = xbmcgui.Dialog().select('{}, Slots'.format(heading), items)
@@ -175,6 +178,8 @@ def manage_slots():
         elif idx == len(slots) + 2:
             _add_binge()
         elif idx == len(slots) + 3:
+            _add_list_slot()
+        elif idx == len(slots) + 4:
             _backup_restore_menu()
         else:
             _edit_slot(slots[idx]['id'])
@@ -269,23 +274,23 @@ def _add_slot():
     if not fav:
         return
 
-    days = _pick_days(['Monday'])
-    if not days:
+    slot = store.new_slot(favourite=fav)
+    schedule = _pick_schedule(slot)
+    if not schedule:
         return
+    slot.update(schedule)
 
     t = _pick_time(19, 0)
     if t is None:
         return
 
     slots = store.load_slots()
-    slot = store.new_slot(favourite=fav)
     slot['id'] = store.next_id(slots)
-    slot['days'] = days
     slot['hour'], slot['minute'] = t
     slots.append(slot)
     store.save_slots(slots)
-    _log('added slot id={} fav="{}" days={}'.format(slot['id'], fav, days))
-    _notify('Added: {}, {} {:02d}:{:02d}'.format(fav, _days_abbrev(days), t[0], t[1]))
+    _log('added slot id={} fav="{}" repeats {}'.format(slot['id'], fav, _schedule_text(slot)))
+    _notify('Added: {}, {} {:02d}:{:02d}'.format(fav, _schedule_text(slot), t[0], t[1]))
 
 
 # --- library queries -------------------------------------------------------
@@ -566,25 +571,122 @@ def _finish_add_sequence(label, seq_type, items, noun):
     <param name="items">The ordered item dicts already built by the list editor.</param>
     <param name="noun">The word for the items in the confirmation toast, 'films' or 'episodes'.</param>
     <remarks>
-    Backing out of the day or time picker abandons the slot; nothing is saved.
+    Backing out of the repeat or time picker abandons the slot; nothing is saved.
     </remarks>
     """
-    days = _pick_days(['Monday'])
-    if not days:
+    slot = store.new_sequence(label=label, seq_type=seq_type)
+    schedule = _pick_schedule(slot)
+    if not schedule:
         return
+    slot.update(schedule)
     t = _pick_time(19, 0)
     if t is None:
         return
     slots = store.load_slots()
-    slot = store.new_sequence(label=label, seq_type=seq_type)
     slot['id'] = store.next_id(slots)
-    slot['days'] = days
     slot['items'] = items
     slot['hour'], slot['minute'] = t
     slots.append(slot)
     store.save_slots(slots)
     _log('added {} sequence id={} "{}" ({} items)'.format(seq_type, slot['id'], label, len(items)))
     _notify('Added: {} ({} {})'.format(label, len(items), noun))
+
+
+# --- Functional skin lists -------------------------------------------------
+
+def _pick_list(current_name):
+    """
+    <summary>
+    Select dialog over the Functional skin's lists, with their item counts.
+    </summary>
+    <param name="current_name">The list to preselect, '' for none.</param>
+    <returns>The chosen list's name, or None when there are no lists or the user
+    backed out.</returns>
+    <remarks>
+    The lists are read from the skin's own file each time, so a list made in the skin
+    a moment ago is offered without restarting anything.
+    </remarks>
+    """
+    lists = functional_lists.load_lists()
+    if not lists:
+        _notify('No Functional skin lists found. Make one in the skin first.',
+                xbmcgui.NOTIFICATION_WARNING, 6000)
+        return None
+    labels = ['{} ({} items)'.format(entry['name'], len(entry['items'])) for entry in lists]
+    names = [entry['name'].lower() for entry in lists]
+    pre = names.index(current_name.lower()) if current_name.lower() in names else -1
+    idx = xbmcgui.Dialog().select('Pick a Functional list', labels, preselect=pre)
+    return lists[idx]['name'] if idx >= 0 else None
+
+
+def _pick_list_mode(current):
+    """
+    <summary>
+    Ask whether a list slot plays in list order or at random.
+    </summary>
+    <param name="current">The mode to preselect.</param>
+    <returns>'next' or 'random', or None when the user backed out.</returns>
+    """
+    labels = [functional_lists.MODE_LABELS[m] for m in functional_lists.MODES]
+    pre = functional_lists.MODES.index(current) if current in functional_lists.MODES else 0
+    idx = xbmcgui.Dialog().select('What should play', labels, preselect=pre)
+    return functional_lists.MODES[idx] if idx >= 0 else None
+
+
+def _add_list_slot():
+    """
+    <summary>
+    Guided add for a Functional list slot: list, then in order or random, then the
+    repeat and the time.
+    </summary>
+    <remarks>
+    The label is left empty so the slot shows the list's own name. Backing out at any
+    step saves nothing.
+    </remarks>
+    """
+    name = _pick_list('')
+    if not name:
+        return
+    mode = _pick_list_mode(functional_lists.DEFAULT_MODE)
+    if mode is None:
+        return
+    slot = store.new_list_slot(name, mode)
+    schedule = _pick_schedule(slot)
+    if not schedule:
+        return
+    slot.update(schedule)
+    t = _pick_time(19, 0)
+    if t is None:
+        return
+    slots = store.load_slots()
+    slot['id'] = store.next_id(slots)
+    slot['hour'], slot['minute'] = t
+    slots.append(slot)
+    store.save_slots(slots)
+    _log('added list slot id={} list="{}" mode={}'.format(slot['id'], name, mode))
+    _notify('Added: {} ({}), {} {:02d}:{:02d}'.format(
+        name, functional_lists.MODE_SHORT[mode], _schedule_text(slot), t[0], t[1]))
+
+
+def _edit_list_choice(s):
+    """
+    <summary>
+    Change which Functional list a slot plays from, or how it picks from it.
+    </summary>
+    <param name="s">The slot dict, changed in place; the caller saves it.</param>
+    """
+    mode = functional_lists.mode_of(s)
+    options = ['List: {}'.format(s.get('list_name') or '(not set)'),
+               'Play: {}'.format(functional_lists.MODE_LABELS[mode])]
+    idx = xbmcgui.Dialog().select('Functional list', options)
+    if idx == 0:
+        name = _pick_list(s.get('list_name') or '')
+        if name:
+            s['list_name'] = name
+    elif idx == 1:
+        new_mode = _pick_list_mode(mode)
+        if new_mode:
+            s['list_mode'] = new_mode
 
 
 def _edit_slot(slot_id):
@@ -600,9 +702,15 @@ def _edit_slot(slot_id):
             return
 
         is_seq = s.get('kind') == 'sequence'
+        is_list = s.get('kind') == 'list'
         seq_type = s.get('seq_type', 'movie')
-        name = s.get('label') or s.get('favourite') or 'Sequence'
-        if is_seq:
+        name = s.get('label') or s.get('favourite') or s.get('list_name') or 'Sequence'
+        if is_list:
+            second = 'Functional list: {}, {}...'.format(
+                s.get('list_name') or '(not set)',
+                functional_lists.MODE_SHORT[functional_lists.mode_of(s)])
+            label_line = 'Label: {}'.format(s.get('label') or '(auto, uses list name)')
+        elif is_seq:
             cur_items = store.items_of(s)
             if seq_type == 'binge':
                 second = 'Binge order: {} episodes...'.format(len(cur_items))
@@ -616,8 +724,8 @@ def _edit_slot(slot_id):
             'Enabled: {}'.format('yes' if s.get('enabled') else 'no'),
             second,
             label_line,
-            'Days: {}'.format(_days_abbrev(store.days_of(s))),
-            'One-shot date: {}'.format(s.get('date') or '(none, weekly)'),
+            'Repeats: {}'.format(_schedule_text(s, with_date=False)),
+            'One-shot date: {}'.format(s.get('date') or '(none, uses the repeat)'),
             'Time: {:02d}:{:02d}'.format(s.get('hour', 0), s.get('minute', 0)),
             'Warning minutes: {}'.format(s.get('warning', 5)),
             'When the countdown ends: {}'.format(
@@ -635,7 +743,9 @@ def _edit_slot(slot_id):
         if idx == 0:
             s['enabled'] = not s.get('enabled')
         elif idx == 1:
-            if is_seq:
+            if is_list:
+                _edit_list_choice(s)
+            elif is_seq:
                 current = list(store.items_of(s))
                 if seq_type == 'binge':
                     s['items'] = _edit_binge_list(current)
@@ -647,13 +757,18 @@ def _edit_slot(slot_id):
                 if fav:
                     s['favourite'] = fav
         elif idx == 2:
-            prompt = 'Label' if is_seq else 'Label (leave empty to use favourite name)'
+            if is_seq:
+                prompt = 'Label'
+            elif is_list:
+                prompt = 'Label (leave empty to use list name)'
+            else:
+                prompt = 'Label (leave empty to use favourite name)'
             label = xbmcgui.Dialog().input(prompt, s.get('label', ''), type=xbmcgui.INPUT_ALPHANUM)
             s['label'] = label
         elif idx == 3:
-            days = _pick_days(store.days_of(s))
-            if days:
-                s['days'] = days
+            schedule = _pick_schedule(s)
+            if schedule:
+                s.update(schedule)
                 s.pop('day', None)  # migrate off the legacy single-day field
         elif idx == 4:
             self_date = _edit_date(s.get('date', ''))
@@ -679,7 +794,7 @@ def _edit_slot(slot_id):
             import copy
             dup = copy.deepcopy(s)
             dup['id'] = store.next_id(slots)
-            dup['label'] = (s.get('label') or s.get('favourite', '')) + ' (copy)'
+            dup['label'] = (s.get('label') or s.get('favourite') or s.get('list_name') or '') + ' (copy)'
             slots.append(dup)
             store.save_slots(slots)
             _notify('Duplicated slot')
@@ -741,6 +856,108 @@ def _pick_days(current):
     return [DAY_NAMES[i] for i in sel]
 
 
+def _schedule_text(slot, with_date=True):
+    """
+    <summary>
+    How often a slot runs, in words: 'Weekly on Mon,Wed', 'Every day',
+    'Monthly on the 15th' or 'Yearly on 25th December'.
+    </summary>
+    <param name="slot">A slot dict.</param>
+    <param name="with_date">When true and a one-shot date is set, describe that
+    instead, since it overrides the repeat.</param>
+    <returns>The text.</returns>
+    """
+    if with_date and slot.get('date'):
+        parts = slot['date'].split('-')
+        if len(parts) == 3:
+            return 'Once on {}/{}/{}'.format(parts[2], parts[1], parts[0])
+        return 'Once on {}'.format(slot['date'])
+    repeat = store.repeat_of(slot)
+    day = store.month_day_of(slot)
+    if repeat == store.REPEAT_MONTHLY:
+        return 'Monthly on the {}'.format(store.ordinal(day))
+    if repeat == store.REPEAT_YEARLY:
+        return 'Yearly on {} {}'.format(store.ordinal(day), store.MONTH_NAMES[store.month_of(slot) - 1])
+    days = _days_abbrev(store.days_of(slot))
+    return days if days == 'Every day' else 'Weekly on {}'.format(days)
+
+
+def _pick_schedule(slot):
+    """
+    <summary>
+    Ask how a slot repeats (weekly, monthly or yearly), then for the days, the day of
+    the month, or the date.
+    </summary>
+    <param name="slot">The slot dict, read for the current values to preselect.</param>
+    <returns>The fields to merge into the slot ('repeat' plus 'days', or 'month_day',
+    or 'month' and 'month_day'), or None when the user backed out.</returns>
+    <remarks>
+    The other repeat's fields are left as they were, so switching back restores the
+    old days. A one-shot date still wins over whatever is chosen here, and the user is
+    told so when one is set.
+    </remarks>
+    """
+    labels = ['Weekly, on chosen days', 'Monthly, on a day of the month', 'Yearly, on a date']
+    current = store.repeat_of(slot)
+    idx = xbmcgui.Dialog().select('Repeats', labels, preselect=store.REPEATS.index(current))
+    if idx < 0:
+        return None
+    repeat = store.REPEATS[idx]
+    if repeat == store.REPEAT_WEEKLY:
+        days = _pick_days(store.days_of(slot))
+        if not days:
+            return None
+        result = {'repeat': repeat, 'days': days}
+    elif repeat == store.REPEAT_MONTHLY:
+        day = _pick_month_day(store.month_day_of(slot), 31, 'Day of the month',
+                              'last day in shorter months', 29)
+        if day is None:
+            return None
+        result = {'repeat': repeat, 'month_day': day}
+    else:
+        m_idx = xbmcgui.Dialog().select('Month', store.MONTH_NAMES,
+                                        preselect=store.month_of(slot) - 1)
+        if m_idx < 0:
+            return None
+        month = m_idx + 1
+        # 2000 is a leap year, so February offers the 29th.
+        max_day = store.last_day_of_month(2000, month)
+        note_from = 29 if month == 2 else max_day + 1
+        day = _pick_month_day(min(store.month_day_of(slot), max_day), max_day,
+                              'Day of {}'.format(store.MONTH_NAMES[m_idx]),
+                              '28th outside leap years', note_from)
+        if day is None:
+            return None
+        result = {'repeat': repeat, 'month': month, 'month_day': day}
+    if slot.get('date'):
+        _notify('A one-shot date is set and overrides this until it is cleared.',
+                xbmcgui.NOTIFICATION_WARNING, 6000)
+    return result
+
+
+def _pick_month_day(current, max_day, heading, note, note_from):
+    """
+    <summary>
+    Select list of days 1st to max_day.
+    </summary>
+    <param name="current">The day to preselect.</param>
+    <param name="max_day">The last day offered.</param>
+    <param name="heading">The dialog heading.</param>
+    <param name="note">Shown in brackets beside the days that do not always exist.</param>
+    <param name="note_from">The first day that carries the note.</param>
+    <returns>The chosen day as an int, or None when the user backed out.</returns>
+    """
+    labels = []
+    for d in range(1, max_day + 1):
+        label = store.ordinal(d)
+        if d >= note_from:
+            label += ' ({})'.format(note)
+        labels.append(label)
+    pre = current - 1 if 1 <= current <= max_day else 0
+    idx = xbmcgui.Dialog().select(heading, labels, preselect=pre)
+    return idx + 1 if idx >= 0 else None
+
+
 def _edit_date(current):
     """
     <summary>
@@ -748,7 +965,7 @@ def _edit_date(current):
     None if the user backed out.
     </summary>
     """
-    choices = ['Set a date...', 'Clear (repeat weekly)']
+    choices = ['Set a date...', 'Clear (use the repeat)']
     idx = xbmcgui.Dialog().select('One-shot date', choices)
     if idx < 0:
         return None
