@@ -3,7 +3,7 @@
 <summary>
 Unit test for the next slot the scheduler publishes to Kodi's Home window for
 skins: the when_label wording, which occurrence of a slot counts as next, the
-numbered Engage.Next.N.* rows for a skin's Coming up list, the order they are
+numbered Engage.Next.N.* rows (title and When only) for a skin's Coming up list, the order they are
 written and cleared in, and the rule that a property is written only when its
 value changes.
 </summary>
@@ -326,25 +326,25 @@ def test_publish():
         single = [w[1] for w in WRITES if not w[1][len('Engage.Next.'):].split('.')[0].isdigit()]
         equal(single[-1], 'Engage.Next.Label', 'Label is written last of the single set')
         equal(got.get('1.Label'), 'TNG', 'row 1 is the same occurrence as the single set')
-        equal(got.get('1.Episode'), 'S03E04, Gravity', 'row 1 episode')
+        equal(got.get('1.Episode'), None, 'rows carry no episode line')
         equal(got.get('1.When'), 'Tuesday 20:30', 'row 1 When')
         equal(got.get('2.Label'), 'Voyager', 'row 2 is the next occurrence after it')
-        equal(got.get('2.Episode'), 'S01E01, Caretaker', 'row 2 episode from its own resolver')
+        equal(got.get('2.Episode'), None, 'row 2 has no episode line either')
         equal(got.get('2.When'), 'Thursday 19:00', 'row 2 When')
         equal(got.get('3.Label'), None, 'no third occurrence, nothing written for row 3')
         equal(WRITES[-1][1], 'Engage.Next.1.Label', 'row 1 Label is written last of all')
-        equal(len(WRITES), 16, 'every property written once: ten single, two rows of three')
-        equal(sched.describe_calls, [2, 1], 'each listed slot is resolved once, single set first')
+        equal(len(WRITES), 14, 'every property written once: ten single, two rows of two')
+        equal(sched.describe_calls, [2], 'only the single set slot is resolved, rows need no lookup')
 
         del WRITES[:]
         sched._publish_next('test again')
         equal(WRITES, [], 'a second publish with nothing changed writes nothing')
-        equal(sched.describe_calls, [2, 1], 'the episode lines came from the cache')
+        equal(sched.describe_calls, [2], 'the episode line came from the cache')
 
         # The library changed: cache cleared, resolver asked again, nothing rewritten.
         sched._on_notification('xbmc', 'VideoLibrary.OnUpdate', '{"item":{"id":5,"type":"episode"}}')
         sched._publish_next('after library update')
-        equal(sched.describe_calls, [2, 1, 2, 1], 'library update clears the cache')
+        equal(sched.describe_calls, [2, 2], 'library update clears the cache')
         equal(WRITES, [], 'same values after the lookup, still nothing written')
 
         # TNG dealt with: Voyager becomes next, only the changed properties are written.
@@ -407,13 +407,14 @@ def test_property_order():
     """<summary>Rows written from 11 down to 1, Label last; cleared from 1 up, Label first.</summary>"""
     publishing = scheduler.next_property_order({'Label': 'x', '1.Label': 'x', '2.Label': 'x'})
     equal(publishing[:10], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
-    equal(publishing[10:13], ['11.Label', '11.When', '11.Episode'], 'an empty row clears Label first')
-    equal(publishing[-6:], ['2.Episode', '2.When', '2.Label', '1.Episode', '1.When', '1.Label'],
+    equal(publishing[10:12], ['11.Label', '11.When'], 'an empty row clears Label first')
+    equal(publishing[-4:], ['2.When', '2.Label', '1.When', '1.Label'],
           'occupied rows end with row 1, each Label last')
-    equal(len(publishing), 10 + 3 * scheduler.NEXT_LIST_COUNT, 'every name once')
+    equal(len(publishing), 10 + 2 * scheduler.NEXT_LIST_COUNT, 'every name once')
+    check(not any(name.endswith('.Episode') for name in publishing), 'rows have no Episode')
     clearing = scheduler.next_property_order({})
     equal(clearing[:10], list(reversed(scheduler.NEXT_PROPERTY_NAMES)), 'single set reversed')
-    equal(clearing[10:16], ['1.Label', '1.When', '1.Episode', '2.Label', '2.When', '2.Episode'],
+    equal(clearing[10:14], ['1.Label', '1.When', '2.Label', '2.When'],
           'rows from 1 upwards, Label first')
     full = scheduler.next_property_order({name: 'x' for name in publishing})
     equal(list(reversed(full[10:])), clearing[10:], 'rows are cleared in the reverse of their publish order')
@@ -448,7 +449,7 @@ def test_occurrences():
 # --- The numbered list ----------------------------------------------------------------
 
 def test_publish_list():
-    """<summary>Rows in due order across slots, repeats allowed, eleven at most, write and clear order.</summary>"""
+    """<summary>Rows in due order across slots, title and When only, repeats allowed, eleven at most, write and clear order.</summary>"""
     reset_window()
     store.save_slots([
         make_slot(1, 'Voyager', ['Sunday', 'Thursday'], 19),
@@ -464,27 +465,28 @@ def test_publish_list():
         sched._publish_next('list')
         got = props()
         expected = [
-            ('Voyager', 'S03E04, Gravity', 'Tonight 19:00'),
-            ('Late', '', 'Tonight 23:00'),
-            ('Daily', 'S01E02, Second', 'Tomorrow 18:00'),
-            ('Film night', '', 'Tomorrow 20:30'),
-            ('Daily', 'S01E02, Second', 'Tuesday 18:00'),
-            ('Daily', 'S01E02, Second', 'Wednesday 18:00'),
-            ('Daily', 'S01E02, Second', 'Thursday 18:00'),
-            ('Voyager', 'S03E04, Gravity', 'Thursday 19:00'),
-            ('Daily', 'S01E02, Second', 'Friday 18:00'),
-            ('TNG', 'S06E15, Tapestry', 'Saturday 21:00'),
-            ('Voyager', 'S03E04, Gravity', 'Sunday 18/10/2026 19:00'),
+            ('Voyager', 'Tonight 19:00'),
+            ('Late', 'Tonight 23:00'),
+            ('Daily', 'Tomorrow 18:00'),
+            ('Film night', 'Tomorrow 20:30'),
+            ('Daily', 'Tuesday 18:00'),
+            ('Daily', 'Wednesday 18:00'),
+            ('Daily', 'Thursday 18:00'),
+            ('Voyager', 'Thursday 19:00'),
+            ('Daily', 'Friday 18:00'),
+            ('TNG', 'Saturday 21:00'),
+            ('Voyager', 'Sunday 18/10/2026 19:00'),
         ]
-        for number, (label, episode, when) in enumerate(expected, start=1):
+        for number, (label, when) in enumerate(expected, start=1):
             equal(got.get('{}.Label'.format(number)), label, 'row {} Label'.format(number))
-            equal(got.get('{}.Episode'.format(number)), episode or None, 'row {} Episode'.format(number))
+            equal(got.get('{}.Episode'.format(number)), None, 'row {} has no episode line'.format(number))
             equal(got.get('{}.When'.format(number)), when, 'row {} When'.format(number))
         equal(got.get('12.Label'), None, 'the twelfth occurrence (Late, next Sunday) is not published')
         equal(got.get('Label'), 'Voyager', 'single set Label matches row 1')
+        equal(got.get('Episode'), 'S03E04, Gravity', 'the single set keeps its episode line')
         equal(got.get('When'), 'Tonight 19:00', 'single set When matches row 1')
         equal(got.get('Count'), '5', 'Count is still the enabled slots, not the rows')
-        equal(sorted(sched.describe_calls), [1, 2, 3, 4, 5], 'each slot resolved exactly once however often it appears')
+        equal(sched.describe_calls, [1], 'only the single set slot is resolved, the rows cost no lookups')
 
         written = [w[1] for w in WRITES]
         labels = [name for name in written if name.endswith('.Label') and name != 'Engage.Next.Label']
@@ -495,8 +497,8 @@ def test_publish_list():
             equal(row[-1], 'Engage.Next.{}.Label'.format(number), 'row {} Label written last'.format(number))
         check(written.index('Engage.Next.Label') < written.index('Engage.Next.11.Label'),
               'the single set goes before the rows')
-        equal(len(WRITES), 10 + 11 * 3 - 3,
-              'every property written once; the empty Thumb and two empty episodes are not written')
+        equal(len(WRITES), 10 + 11 * 2 - 1,
+              'every property written once; the empty Thumb is not written')
 
         del WRITES[:]
         sched._publish_next('list again')
@@ -525,9 +527,8 @@ def test_publish_list():
         equal(props(), {}, 'everything cleared')
         equal(WRITES[0], ('clear', 'Engage.Next.Label'), 'single Label first')
         rows = [w[1] for w in WRITES if w[1][len('Engage.Next.'):].split('.')[0].isdigit()]
-        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.1.Episode',
-                     'Engage.Next.2.Label', 'Engage.Next.2.When'],
-              'rows cleared from 1 upwards, Label first, only what was set (First kept slot 1\'s cached episode)')
+        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.2.Label', 'Engage.Next.2.When'],
+              'rows cleared from 1 upwards, Label first, only what was set')
         check(written.index('Engage.Next.11.Label') < written.index('Engage.Next.1.Label'),
               'row 11 was written before row 1')
     finally:
