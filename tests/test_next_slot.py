@@ -368,8 +368,16 @@ def test_publish():
         equal(written[-1], 'Engage.Next.1.Label', 'row 1 Label still written last of all')
 
         # A save from the slot manager arrives as a notification and clears the cache.
-        sched._on_notification('service.engage', 'Other.slots_saved', 'null')
+        # _publish_async is swapped for a recorder so no thread can refill the cache
+        # before the check; the real publish is covered by the direct calls above.
+        async_reasons = []
+        sched._publish_async = async_reasons.append
+        try:
+            sched._on_notification('service.engage', 'Other.slots_saved', 'null')
+        finally:
+            del sched._publish_async
         equal(sched._next_item_cache, {}, 'slots_saved clears the episode cache')
+        equal(async_reasons, ['slots saved'], 'slots_saved asks for one republish')
 
         # Nothing enabled: everything cleared, Label first.
         store.save_slots([make_slot(1, 'Voyager', ['Thursday'], 19, enabled=False)])
