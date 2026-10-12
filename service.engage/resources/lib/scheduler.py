@@ -20,6 +20,7 @@ behind its write discipline.
 </remarks>
 """
 import json
+import random
 import re
 import threading
 import time
@@ -29,6 +30,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 
+from resources.lib import functional_lists
 from resources.lib.slots import SLOTS_SAVED_MESSAGE
 
 ADDON_ID = 'service.engage'
@@ -207,6 +209,11 @@ class Slot:
         # Multiple days supported via 'days'; fall back to legacy single 'day'.
         self.days = data.get('days') or ([data['day']] if data.get('day') else ['Monday'])
         self.specific_date = (data.get('date') or '').strip()
+        # Weekly (the days above), monthly or yearly; see runs_on.
+        from resources.lib import slots as repeat_store
+        self.repeat = repeat_store.repeat_of(data)
+        self.month_day = repeat_store.month_day_of(data)
+        self.month = repeat_store.month_of(data)
         self.hour = int(data.get('hour', 19))
         self.minute = int(data.get('minute', 0))
         self.warning = int(data.get('warning', 5))
@@ -228,6 +235,12 @@ class Slot:
             self.items = [{'type': 'movie', 'id': m.get('id'), 'title': m.get('title'),
                            'year': m.get('year')}
                           for m in (data.get('movies') or [])]
+        # 'list' plays from one of the Functional skin's lists, named here.
+        # list_items is filled by _reload_slots from the skin's file, never
+        # from slots.json, so it is always the list as the skin has it now.
+        self.list_name = data.get('list_name') or ''
+        self.list_mode = functional_lists.mode_of(data)
+        self.list_items = []
 
     def day_indexes(self):
         """
@@ -242,6 +255,34 @@ class Slot:
             except ValueError:
                 pass
         return out
+
+    def runs_on(self, day):
+        """
+        <summary>
+        Whether this slot has an occurrence on the given date.
+        </summary>
+        <param name="day">A date.</param>
+        <returns>True when the slot runs that day.</returns>
+        <remarks>
+        The one rule both the due check and the next-slot walk use. A valid one-shot
+        date wins over the repeat; an invalid one is ignored, as it always has been.
+        Monthly runs on month_day, moved to the last day of a shorter month, so the
+        31st runs on 30th April and 28th or 29th February. Yearly runs on month_day of
+        month with the same move, so 29th February runs on the 28th outside leap years.
+        Weekly runs on the days list.
+        </remarks>
+        """
+        target_date = self.parsed_date()
+        if target_date is not None:
+            return day == target_date
+        from resources.lib import slots as repeat_store
+        if self.repeat == repeat_store.REPEAT_MONTHLY:
+            return day.day == min(self.month_day, repeat_store.last_day_of_month(day.year, day.month))
+        if self.repeat == repeat_store.REPEAT_YEARLY:
+            if day.month != self.month:
+                return False
+            return day.day == min(self.month_day, repeat_store.last_day_of_month(day.year, day.month))
+        return day.weekday() in self.day_indexes()
 
     def parsed_date(self):
         """
@@ -307,6 +348,10 @@ class EngageScheduler:
         # item here; _resume_armed gates resuming until the slot itself ends.
         self.resume_after = None
         self._resume_armed = False
+        # A random list slot's pick, keyed by occurrence like the trackers
+        # above, so the banner, a snoozed re-prompt and the playback all name
+        # the same item. Purged with them when the day rolls over.
+        self._list_picks = {}
         self._player = _EngagePlayerMonitor(self)
         # Next-slot publishing for skins. The cache holds each slot's episode
         # line and poster, keyed by slot id, so the library is asked once per
@@ -351,19 +396,39 @@ class EngageScheduler:
         </summary>
         <returns>The list of Slot objects to check this tick.</returns>
         <remarks>
-        A sequence with no items, or a favourite slot with no favourite, is skipped with
-        one warning per slot id per service run. A missing label defaults to the favourite
-        name, or to 'Sequence'. Reading every tick means edits made in the Manage slots
-        dialog take effect without a restart.
+        A sequence with no items, a favourite slot with no favourite, or a list slot whose
+        Functional list is missing or empty, is skipped with one warning per slot id per
+        service run. A missing label defaults to the favourite name, the list name, or
+        'Sequence'. Reading every tick means edits made in the Manage slots dialog, and
+        changes made to a list in the skin, take effect without a restart. The skin's
+        lists.json is read at most once per call.
         </remarks>
         """
         from resources.lib import slots as slot_store
         slots = []
+        skin_lists = None
         for data in slot_store.load_slots():
             slot = Slot(data)
             if not slot.enabled:
                 continue
-            if slot.kind == 'sequence':
+            if slot.kind == 'list':
+                if skin_lists is None:
+                    skin_lists = functional_lists.load_lists()
+                found = functional_lists.find_list(slot.list_name, skin_lists)
+                if not found or not found['items']:
+                    if slot.id not in self._warned_misconfig:
+                        why = 'is empty' if found else 'was not found in the Functional skin'
+                        self._log('Slot {}: list "{}" {}, skipping'.format(
+                            slot.id, slot.list_name, why), xbmc.LOGWARNING)
+                        self._warned_misconfig.add(slot.id)
+                    continue
+                # A list that comes back clears the warning, so a second
+                # disappearance is logged again.
+                self._warned_misconfig.discard(slot.id)
+                slot.list_items = found['items']
+                if not slot.label:
+                    slot.label = found['name']
+            elif slot.kind == 'sequence':
                 if not slot.items:
                     if slot.id not in self._warned_misconfig:
                         self._log('Slot {} is an empty sequence, skipping'.format(slot.id), xbmc.LOGWARNING)
@@ -399,19 +464,13 @@ class EngageScheduler:
         Return today's datetime for this slot if today matches, else None.
         </summary>
         <remarks>
-        Specific date overrides day-of-week, if a YYYY-MM-DD is set, the slot
-        only fires on that exact date. Invalid date strings fall back to the
-        weekly day-of-week behaviour.
+        Whether today counts is Slot.runs_on: a one-shot date, else the weekly days,
+        the monthly day or the yearly date.
         </remarks>
         """
         now = datetime.now()
-        target_date = slot.parsed_date()
-        if target_date is not None:
-            if now.date() != target_date:
-                return None
-        else:
-            if now.weekday() not in slot.day_indexes():
-                return None
+        if not slot.runs_on(now.date()):
+            return None
         return now.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
 
     def _activate_favourite(self, favourite_name):
@@ -715,14 +774,127 @@ class EngageScheduler:
         }))
         self._log('Player.Open {} response: {}'.format(item['type'], response))
 
-    def _play_slot(self, slot):
+    def _list_item_watched(self, item):
+        """
+        <summary>
+        Whether one Functional list item has been watched, by its library playcount.
+        </summary>
+        <param name="item">One list item dict from the skin's lists.json.</param>
+        <returns>True when the library says it has been played; False when it has not,
+        or when the library cannot say.</returns>
+        <remarks>
+        Only items with a library id can be answered. A plain file, a plugin path or a
+        library id that no longer resolves counts as unwatched, so it stays playable. In
+        'next' mode that means such an item at the head of the list is offered every
+        time; the skin's Remove Watched switch on the list, which tracks plain files by
+        playback progress, is the way to move past it.
+        </remarks>
+        """
+        spec = functional_lists.play_spec(item) or {}
+        lookups = {
+            'movieid': ('VideoLibrary.GetMovieDetails', 'moviedetails'),
+            'episodeid': ('VideoLibrary.GetEpisodeDetails', 'episodedetails'),
+            'musicvideoid': ('VideoLibrary.GetMusicVideoDetails', 'musicvideodetails'),
+            'songid': ('AudioLibrary.GetSongDetails', 'songdetails'),
+        }
+        for id_key, (method, result_key) in lookups.items():
+            if id_key in spec:
+                data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                    'jsonrpc': '2.0', 'method': method,
+                    'params': {id_key: spec[id_key], 'properties': ['playcount']}, 'id': 1
+                })))
+                details = data.get('result', {}).get(result_key) or {}
+                return int(details.get('playcount', 0) or 0) > 0
+        return False
+
+    def _resolve_list_item(self, slot, key=None):
+        """
+        <summary>
+        Choose what a list slot plays: the first unwatched item in list order, or for a
+        random slot a random unwatched one.
+        </summary>
+        <param name="slot">A list slot whose list_items _reload_slots has filled.</param>
+        <param name="key">The occurrence key when a banner or playback needs a definite
+        item; None when only describing the slot.</param>
+        <returns>{'spec', 'label', 'art'} for the chosen item, None when an in order
+        list is all watched, or for a random slot asked without a key.</returns>
+        <remarks>
+        A random slot picks among unwatched items and, once every item has been
+        watched, among all of them, so a rewatch list never runs dry. The pick is stored
+        under the key and reused for that occurrence, so a snoozed banner comes back with
+        the same film and Start plays the one the banner named. Without a key no pick is
+        made, because the skin's Coming up block runs ahead of the banner and a pick made
+        there would be forgotten on a restart; the describer shows 'Random pick' instead.
+        </remarks>
+        """
+        if slot.list_mode == functional_lists.MODE_RANDOM:
+            if key is None:
+                return None
+            if key in self._list_picks:
+                return self._list_picks[key]
+            unwatched = [it for it in slot.list_items if not self._list_item_watched(it)]
+            choice = self._list_choice(random.choice(unwatched or slot.list_items))
+            self._list_picks[key] = choice
+            return choice
+        for item in slot.list_items:
+            if not self._list_item_watched(item):
+                return self._list_choice(item)
+        return None
+
+    def _list_choice(self, item):
+        """
+        <summary>
+        The play spec, banner line and poster for one list item.
+        </summary>
+        <param name="item">One list item dict.</param>
+        <returns>{'spec', 'label', 'art'}; art is the thumb the skin captured, which may
+        be ''.</returns>
+        """
+        return {'spec': functional_lists.play_spec(item),
+                'label': functional_lists.item_label(item),
+                'art': item.get('thumb') or ''}
+
+    def _play_list_item(self, choice):
+        """
+        <summary>
+        Play a chosen list item through Player.Open, by library id or by file path.
+        </summary>
+        <param name="choice">A dict from _resolve_list_item.</param>
+        """
+        response = xbmc.executeJSONRPC(json.dumps({
+            'jsonrpc': '2.0', 'method': 'Player.Open',
+            'params': {'item': choice['spec']}, 'id': 1
+        }))
+        self._log('Player.Open list item response: {}'.format(response))
+
+    def _play_slot(self, slot, key=None):
         """
         <summary>
         Play whatever this slot points at, for a sequence, the next unwatched
-        item in the list; for a favourite, the next unwatched episode (TV) or
-        the favourite itself (movie / folder / playlist / etc).
+        item in the list; for a Functional list, the item _resolve_list_item
+        chooses; for a favourite, the next unwatched episode (TV) or the
+        favourite itself (movie / folder / playlist / etc).
         </summary>
+        <param name="slot">The slot to play.</param>
+        <param name="key">The occurrence key, so a random list slot plays the item its
+        banner named. Every caller has one; it defaults to None only so a list slot
+        played without it still plays something.</param>
         """
+        if slot.kind == 'list':
+            item = self._resolve_list_item(slot, key or occurrence_key(slot, datetime.now()))
+            if item:
+                self._log('Slot {}: playing "{}" from list "{}" ({})'.format(
+                    slot.index + 1, item['label'], slot.list_name, slot.list_mode))
+                self._play_list_item(item)
+            else:
+                self._log('Slot {}: list all watched'.format(slot.index + 1))
+                xbmcgui.Dialog().notification(
+                    'Engage',
+                    '{}, all watched!'.format(slot.label),
+                    xbmcgui.NOTIFICATION_INFO, 6000
+                )
+            return
+
         if slot.kind == 'sequence':
             item = self._resolve_next_item(slot)
             if item:
@@ -758,7 +930,7 @@ class EngageScheduler:
             return  # GUI wasn't ready; caller leaves the slot un-warned to retry
         now = datetime.now()
         if action == 'open':
-            self._play_slot(slot)
+            self._play_slot(slot, key)
             self.triggered[key] = True
             self._log('Slot {} opened by user'.format(slot.index + 1))
         elif action == 'snooze':
@@ -819,7 +991,7 @@ class EngageScheduler:
                 self.resume_after = None
             player.stop()
             xbmc.sleep(800)  # let the stop settle before opening the slot
-        self._play_slot(slot)
+        self._play_slot(slot, key)
         self.triggered[key] = True
 
     def _capture_now_playing(self):
@@ -918,7 +1090,7 @@ class EngageScheduler:
         slot, key = self.queued_next.pop(0)
         self._log('Firing queued slot {} ({} still waiting)'.format(
             slot.index + 1, len(self.queued_next)))
-        self._play_slot(slot)
+        self._play_slot(slot, key)
         self.triggered[key] = True
 
     def _resume_playback(self, info):
@@ -1053,7 +1225,8 @@ class EngageScheduler:
         <returns>A datetime, or None when nothing was ever played or the slot is not
         something the library can answer for.</returns>
         <remarks>
-        A sequence is checked item by item in list order. A TV show favourite looks at
+        A sequence is checked item by item in list order, and so is a Functional list,
+        counting only its library movies and episodes. A TV show favourite looks at
         every episode of the show, because the episode watched early is not the one the
         banner would offer next. A movie favourite stored as a videodb path is looked up
         by id. A favourite that is a folder, playlist, plugin or plain file path is not
@@ -1061,7 +1234,10 @@ class EngageScheduler:
         </remarks>
         """
         if slot.kind == 'sequence':
-            return self._last_played_in_sequence(slot, since)
+            return self._last_played_in_items(slot.items, since)
+        if slot.kind == 'list':
+            refs = [functional_lists.library_ref(it) for it in slot.list_items]
+            return self._last_played_in_items([r for r in refs if r], since)
         favs = self._get_favourites_raw()
         fav = next((f for f in favs if f.get('title', '').lower() == slot.favourite.lower()), None)
         if not fav:
@@ -1117,13 +1293,14 @@ class EngageScheduler:
         details = json.loads(response).get('result', {}).get(result_key) or {}
         return parse_kodi_datetime(details.get('lastplayed'))
 
-    def _last_played_in_sequence(self, slot, since):
+    def _last_played_in_items(self, items, since):
         """
         <summary>
-        The newest lastplayed stamp among a sequence's items, stopping at the first one
-        inside the window.
+        The newest lastplayed stamp among a sequence's or a list's library items,
+        stopping at the first one inside the window.
         </summary>
-        <param name="slot">A sequence slot.</param>
+        <param name="items">{'type', 'id'} dicts: a sequence's items, or a list slot's
+        items converted by functional_lists.library_ref.</param>
         <param name="since">Start of the recent watch window.</param>
         <returns>A datetime, or None when no item has been played.</returns>
         <remarks>
@@ -1133,7 +1310,7 @@ class EngageScheduler:
         </remarks>
         """
         newest = None
-        for entry in slot.items:
+        for entry in items:
             if not entry.get('id'):
                 continue
             stamp = self._last_played_of_item(entry)
@@ -1145,11 +1322,15 @@ class EngageScheduler:
                 newest = stamp
         return newest
 
-    def _handle_warning(self, slot, scheduled_dt):
+    def _handle_warning(self, slot, scheduled_dt, key=None):
         """
         <summary>
         Show the Engage banner prompt. Returns (action, snooze_minutes).
         </summary>
+        <param name="slot">The slot that is due.</param>
+        <param name="scheduled_dt">When it is due, for the countdown and the toast.</param>
+        <param name="key">The occurrence key, so a random list slot's banner names the
+        item that will then play.</param>
         <remarks>
         action is one of: 'open', 'snooze', 'queue', 'cancel'. (The startup
         GUI-readiness wait is handled once in _wait_for_gui; we deliberately do
@@ -1163,7 +1344,7 @@ class EngageScheduler:
         # Work out the sub-line + poster for the banner, fresh from the library
         # so the banner never offers an episode that was watched since the
         # publisher last looked.
-        episode_label, thumb = self._describe_slot(slot)
+        episode_label, thumb = self._describe_slot(slot, key)
 
         # Brief notification so the user knows something just popped.
         name = slot.label if not episode_label else '{} ({})'.format(slot.label, episode_label)
@@ -1187,14 +1368,17 @@ class EngageScheduler:
             slot.index + 1, action, snooze_minutes))
         return action, snooze_minutes
 
-    def _describe_slot(self, slot):
+    def _describe_slot(self, slot, key=None):
         """
         <summary>
         The episode line and poster for a slot: the next unwatched episode for a TV
-        favourite, the next unwatched item for a sequence, or the favourite's own
-        thumbnail for a plain favourite.
+        favourite, the next unwatched item for a sequence or an in order list, the
+        item picked for a random list, or the favourite's own thumbnail for a plain
+        favourite.
         </summary>
         <param name="slot">The slot to describe.</param>
+        <param name="key">The occurrence key. Only a random list slot uses it: with a
+        key it picks and remembers the item, without one it answers 'Random pick'.</param>
         <returns>A tuple (episode_label, thumb). episode_label is '' for a movie, folder
         or other non-TV favourite and 'All watched' for a finished sequence; thumb may
         be ''.</returns>
@@ -1204,7 +1388,15 @@ class EngageScheduler:
         skin line is formatted exactly like the banner's without querying every tick.
         </remarks>
         """
-        if slot.kind == 'sequence':
+        if slot.kind == 'list':
+            nxt = self._resolve_list_item(slot, key)
+            if nxt:
+                episode_label, thumb = nxt['label'], nxt['art']
+            elif slot.list_mode == functional_lists.MODE_RANDOM:
+                episode_label, thumb = 'Random pick', ''
+            else:
+                episode_label, thumb = 'All watched', ''
+        elif slot.kind == 'sequence':
             nxt = self._resolve_next_item(slot)
             episode_label = nxt['label'] if nxt else 'All watched'
             thumb = nxt.get('art', '') if nxt else ''
@@ -1223,14 +1415,17 @@ class EngageScheduler:
         <returns>The same (episode_label, thumb) tuple _describe_slot returns.</returns>
         <remarks>
         The cache entry carries a signature of what the slot points at (kind, favourite,
-        sequence type and item ids), so an edited slot is re-resolved even if the save
+        sequence type and item ids, and for a list slot its name, mode and the identity
+        of every item in it), so an edited slot or an edited list is re-resolved even if the save
         notification that normally clears the cache was missed. A lookup failure is
         logged and cached as an empty line rather than retried every tick; the next
         library change or slot save clears it. The banner never uses this cache.
         </remarks>
         """
         signature = (slot.kind, slot.favourite, slot.seq_type,
-                     tuple(entry.get('id') for entry in slot.items))
+                     tuple(entry.get('id') for entry in slot.items),
+                     slot.list_name, slot.list_mode,
+                     tuple(functional_lists.item_identity(it) for it in slot.list_items))
         cached = self._next_item_cache.get(slot.id)
         if cached is not None and cached[0] == signature:
             return cached[1], cached[2]
@@ -1284,9 +1479,9 @@ class EngageScheduler:
         <returns>A list of (due, key) tuples, the occurrence's datetime and its tracker
         key, empty when there is none within NEXT_LOOKAHEAD_DAYS.</returns>
         <remarks>
-        Walks today and the next NEXT_LOOKAHEAD_DAYS days. A one off date slot occurs on
-        its date only; a weekly slot on each weekday in its list, at its hour and minute.
-        An invalid date string falls back to the weekly days, as _get_scheduled_dt does.
+        Walks today and the next NEXT_LOOKAHEAD_DAYS days, keeping each day Slot.runs_on
+        accepts, at the slot's hour and minute. So a monthly or yearly slot appears only
+        once its day is within the look ahead window, as _get_scheduled_dt would see it.
         An occurrence is skipped when its key is in triggered or cancelled, so a slot
         played, skipped as recently watched or cancelled today does not show as next.
         An occurrence whose time has passed is still offered while the scheduler would
@@ -1294,8 +1489,6 @@ class EngageScheduler:
         off. Beyond that it is gone for the day and the following occurrence is next.
         </remarks>
         """
-        date_only = slot.parsed_date()
-        weekdays = slot.day_indexes()
         hours = self._catchup_hours()
         if hours > 0:
             live_for = timedelta(hours=hours)
@@ -1304,10 +1497,7 @@ class EngageScheduler:
         found = []
         for offset in range(NEXT_LOOKAHEAD_DAYS + 1):
             day = (now + timedelta(days=offset)).date()
-            if date_only is not None:
-                if day != date_only:
-                    continue
-            elif day.weekday() not in weekdays:
+            if not slot.runs_on(day):
                 continue
             due = datetime(day.year, day.month, day.day, slot.hour, slot.minute)
             key = occurrence_key(slot, due)
@@ -1613,7 +1803,8 @@ class EngageScheduler:
         today_str = now.strftime('%Y-%m-%d')
 
         # Purge stale tracking entries from previous days
-        for tracker in (self.triggered, self.warned, self.cancelled, self.snoozed):
+        for tracker in (self.triggered, self.warned, self.cancelled, self.snoozed,
+                        self._list_picks):
             stale = [k for k in tracker if not k.startswith(today_str)]
             for k in stale:
                 del tracker[k]
@@ -1677,7 +1868,7 @@ class EngageScheduler:
             # or cancel; ignoring it auto-plays when the countdown hits zero.
             del self.snoozed[key]
             self._log('Snooze expired for slot {}, re-showing prompt'.format(slot.index + 1))
-            action, snooze_min = self._handle_warning(slot, now + timedelta(seconds=60))
+            action, snooze_min = self._handle_warning(slot, now + timedelta(seconds=60), key)
             self._apply_prompt_action(slot, key, action, snooze_min)
             return
 
@@ -1710,7 +1901,7 @@ class EngageScheduler:
                     return
                 self._log('Catch-up: slot {} was due at {}, prompting ({}/{})'.format(
                     slot.index + 1, scheduled_dt.strftime('%H:%M'), shown + 1, max_prompts))
-                action, snooze_min = self._handle_warning(slot, scheduled_dt)
+                action, snooze_min = self._handle_warning(slot, scheduled_dt, key)
                 if action != 'skip':
                     slot_store.bump_catchup_count(key, now.strftime('%Y-%m-%d'))
                     self._apply_prompt_action(slot, key, action, snooze_min)
@@ -1724,7 +1915,7 @@ class EngageScheduler:
         if warning_dt <= now < scheduled_dt:
             if key not in self.warned:
                 self._debug('Warning window for slot {}'.format(slot.index + 1))
-                action, snooze_min = self._handle_warning(slot, scheduled_dt)
+                action, snooze_min = self._handle_warning(slot, scheduled_dt, key)
                 self._apply_prompt_action(slot, key, action, snooze_min)
                 if action != 'skip':
                     self.warned[key] = True
@@ -1738,12 +1929,12 @@ class EngageScheduler:
                     xbmcgui.NOTIFICATION_INFO,
                     5000
                 )
-                self._play_slot(slot)
+                self._play_slot(slot, key)
                 self.triggered[key] = True
                 self._log('Slot {} auto-opened at scheduled time'.format(slot.index + 1))
             elif key not in self.warned:
                 # Kodi started right at/after the time, no warning was shown, no auto-open
-                action, snooze_min = self._handle_warning(slot, scheduled_dt)
+                action, snooze_min = self._handle_warning(slot, scheduled_dt, key)
                 self._apply_prompt_action(slot, key, action, snooze_min)
                 if action != 'skip':
                     self.warned[key] = True

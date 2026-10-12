@@ -29,7 +29,10 @@ Favourites and library.
 ## Features
 
 - 🗓️ **Unlimited watch slots**, schedule any favourite (TV show, movie, folder,
-  playlist) on chosen day(s) and a time, weekly or as a one-off date.
+  playlist) at a time that repeats weekly on chosen day(s), monthly on a day of
+  the month, yearly on a date, or just once on a one-off date. A monthly slot on
+  the 29th to 31st runs on the last day of a shorter month, and a yearly 29th
+  February runs on the 28th outside leap years.
 - 📅 **Multiple days per slot**, pick any combination of weekdays (great for a
   show that's stripped daily, e.g. the Simpsons every weekday at 6).
 - 🎞️ **Movie sequences**, build an ordered list of films (e.g. all the Marvel
@@ -37,7 +40,14 @@ Favourites and library.
 - 🦸 **Binge / crossover orders**, weave episodes from several shows into one
   hand-built order (Arrow S3E1 to 3, then Flash S1E1 to 4, then back to Arrow) for
   interlinked series like the Arrowverse. Plays the next unwatched in your order.
-- 📺 **Knows the next episode**, for TV shows it resolves the exact next
+- 🍿 **Functional skin lists**, schedule one of the lists you build in the
+  Functional skin (a "Saturday Night Movie" list, say) and each showing plays
+  either the next unwatched item in the list's order or a random unwatched one.
+  The list stays in the skin: add, reorder or remove items there and the next
+  showing follows. Once everything in a random list is watched it picks from the
+  whole list again. A plain file or plugin item in a list has no watched count
+  Engage can read, so it is always treated as unwatched; turn on the list's
+  Remove Watched switch in the skin to have such items drop off once seen.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
   *unwatched* episode (and skips season-0 specials until the main run is done).
   Plays it as a proper library/plugin item, so metadata and watched-tracking
   just work.
