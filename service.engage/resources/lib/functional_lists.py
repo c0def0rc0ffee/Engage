@@ -34,18 +34,29 @@ DBID_KEYS = {
     'song': 'songid',
 }
 
+# How a list slot chooses. The two unwatched modes skip what the library says
+# has been played; the two 'any' modes ignore watched state. MODE_TURN walks
+# the list one item per showing and wraps, remembering its place in
+# list_progress.json (see slots.get_list_progress and turn_index).
 MODE_NEXT = 'next'
+MODE_TURN = 'turn'
 MODE_RANDOM = 'random'
+MODE_RANDOM_ANY = 'random_any'
 DEFAULT_MODE = MODE_NEXT
+RANDOM_MODES = (MODE_RANDOM, MODE_RANDOM_ANY)
 # Order here is the order the picker shows them in.
-MODES = [MODE_NEXT, MODE_RANDOM]
+MODES = [MODE_NEXT, MODE_TURN, MODE_RANDOM, MODE_RANDOM_ANY]
 MODE_LABELS = {
     MODE_NEXT: 'In order, the next unwatched item',
+    MODE_TURN: 'In order, every item in turn, watched or not',
     MODE_RANDOM: 'Random, any unwatched item',
+    MODE_RANDOM_ANY: 'Random, any item, watched or not',
 }
 MODE_SHORT = {
-    MODE_NEXT: 'in order',
-    MODE_RANDOM: 'random',
+    MODE_NEXT: 'in order, unwatched',
+    MODE_TURN: 'in order, any',
+    MODE_RANDOM: 'random, unwatched',
+    MODE_RANDOM_ANY: 'random, any',
 }
 
 
@@ -63,7 +74,7 @@ def _log(msg, level=xbmc.LOGINFO):
 def mode_of(slot):
     """
     <summary>
-    How a list slot chooses what to play, 'next' or 'random'.
+    How a list slot chooses what to play, one of MODES.
     </summary>
     <param name="slot">A slot dict from the store.</param>
     <returns>One of MODES; an unknown or missing value gives DEFAULT_MODE.</returns>
@@ -229,3 +240,32 @@ def item_identity(item):
     if dbid:
         return (item.get('dbtype'), dbid)
     return ('file', item.get('file') or '')
+
+
+def turn_index(items, progress):
+    """
+    <summary>
+    Which item an 'every item in turn' slot plays next.
+    </summary>
+    <param name="items">The list's items as the skin has them now; not empty.</param>
+    <param name="progress">What slots.get_list_progress returned: {'identity': [...],
+    'index': n} for the item played last time, or None when nothing has played yet.</param>
+    <returns>An index into items.</returns>
+    <remarks>
+    The item after the one played last, found by identity so reordering the list in
+    the skin does not lose the place, wrapping to the first after the last. When that
+    item has since been removed, its old position is used instead: the item that slid
+    into its place is the one after it, so nothing is skipped. With no progress, or
+    progress that cannot be read, the first item plays.
+    </remarks>
+    """
+    if not progress:
+        return 0
+    last = tuple(progress.get('identity') or ())
+    for i, it in enumerate(items):
+        if item_identity(it) == last:
+            return (i + 1) % len(items)
+    try:
+        return int(progress.get('index', 0)) % len(items)
+    except (ValueError, TypeError):
+        return 0
