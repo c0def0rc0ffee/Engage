@@ -54,17 +54,19 @@ NEXT_PROPERTY_PREFIX = 'Engage.Next.'
 NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
                        'SlotId', 'State', 'Count', 'Label')
 # Beside the single set, the next NEXT_LIST_COUNT occurrences across every
-# enabled slot are published in due order as Engage.Next.<n>.Label, .Episode
-# and .When (n from 1), for a skin's "Coming up" list. Number 1 is the same
-# occurrence as the single set. One slot can appear more than once, a weekly
-# slot on two days this week for instance; that is wanted. A number with no
-# occurrence has its three properties cleared. Label is last here for the same
-# reason as above: a row is written Label last and cleared Label first, rows
-# are written from NEXT_LIST_COUNT down to 1 and cleared from 1 upwards, so a
-# skin that gates its list on row 1 and each row on its own label never shows
-# a half updated list. See next_property_order.
+# enabled slot are published in due order as Engage.Next.<n>.Label and .When
+# (n from 1), for a skin's "Coming up" list. Number 1 is the same occurrence
+# as the single set. One slot can appear more than once, a weekly slot on two
+# days this week for instance; that is wanted. A number with no occurrence has
+# both properties cleared. The rows carry no episode line: the list shows the
+# slot's title only, and only the single set keeps Episode for the block.
+# Label is last here for the same reason as above: a row is written Label
+# last and cleared Label first, rows are written from NEXT_LIST_COUNT down to
+# 1 and cleared from 1 upwards, so a skin that gates its list on row 1 and
+# each row on its own label never shows a half updated list. See
+# next_property_order.
 NEXT_LIST_COUNT = 11
-NEXT_LIST_NAMES = ('Episode', 'When', 'Label')
+NEXT_LIST_NAMES = ('When', 'Label')
 # How far ahead the next occurrence is looked for. Today plus seven days, so a
 # weekly slot already dealt with today still has a next occurrence (the same
 # weekday next week) rather than vanishing from the skin for the evening.
@@ -130,12 +132,12 @@ def next_property_order(values):
     <returns>A list of names: the single set, then the numbered rows.</returns>
     <remarks>
     Publishing: the single set in NEXT_PROPERTY_NAMES order (Label last), then the
-    rows from NEXT_LIST_COUNT down to 1, each Episode, When, Label. Clearing: the
+    rows from NEXT_LIST_COUNT down to 1, each When then Label. Clearing: the
     single set reversed (Label first, as it always has been), then rows 1 upwards,
     each Label first, so each group is cleared in the reverse of its publish order.
     A row with no Label in values is being cleared, so it takes the clearing order
     within itself even during a publish: a row dropping off the end of the list
-    hides before its other two lines go.
+    hides before its When goes.
     </remarks>
     """
     if values:
@@ -1355,9 +1357,9 @@ class EngageScheduler:
         the banner's episode line (empty for a non-TV favourite), When the words from
         when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
         Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
-        numbered rows, each with its own Label, Episode and When; a number with no
-        occurrence is cleared. The episode line comes from the per slot cache, so a
-        slot on two days this week costs one lookup. Each property is written only
+        numbered rows, each with its own Label and When and no episode line, so a
+        skin's list shows titles only and the rows need no library lookup; a number
+        with no occurrence is cleared. Each property is written only
         when its value differs from what the window already holds, see
         _write_next_properties. Any failure is logged and swallowed: the skin block is
         a convenience and must never cost a prompt.
@@ -1393,9 +1395,7 @@ class EngageScheduler:
                     'Count': str(len(slots)),
                 }
                 for number, (row_due, _, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
-                    row_episode, _ = self._next_item_cached(row_slot)
                     values['{}.Label'.format(number)] = row_slot.label
-                    values['{}.Episode'.format(number)] = row_episode
                     values['{}.When'.format(number)] = when_label(row_due, now)
                 self._write_next_properties(values, reason)
             except Exception:
