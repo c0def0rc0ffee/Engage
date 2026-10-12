@@ -13,8 +13,10 @@ slot whose show was played within that many hours is skipped for the day, so
 watching early does not earn a reminder for what was just watched.
 
 The scheduler also publishes the next slot due as Engage.Next.* properties on
-Kodi's Home window (id 10000) so a skin can show a "Coming up" block. See
-_publish_next for the contract and the reasons behind its write discipline.
+Kodi's Home window (id 10000) so a skin can show a "Coming up" block, and the
+next few occurrences across every slot as numbered Engage.Next.N.* properties
+for a "Coming up" list. See _publish_next for the contract and the reasons
+behind its write discipline.
 </remarks>
 """
 import json
@@ -51,6 +53,18 @@ HOME_WINDOW_ID = 10000
 NEXT_PROPERTY_PREFIX = 'Engage.Next.'
 NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
                        'SlotId', 'State', 'Count', 'Label')
+# Beside the single set, the next NEXT_LIST_COUNT occurrences across every
+# enabled slot are published in due order as Engage.Next.<n>.Label, .Episode
+# and .When (n from 1), for a skin's "Coming up" list. Number 1 is the same
+# occurrence as the single set. One slot can appear more than once, a weekly
+# slot on two days this week for instance; that is wanted. A number with no
+# occurrence has its three properties cleared. Label is last here for the same
+# reason as above: a row is written Label last and cleared Label first, rows
+# are written from NEXT_LIST_COUNT down to 1 and cleared from 1 upwards, so a
+# skin that gates its list on row 1 and each row on its own label never shows
+# a half updated list. See next_property_order.
+NEXT_LIST_COUNT = 11
+NEXT_LIST_NAMES = ('Episode', 'When', 'Label')
 # How far ahead the next occurrence is looked for. Today plus seven days, so a
 # weekly slot already dealt with today still has a next occurrence (the same
 # weekday next week) rather than vanishing from the skin for the evening.
@@ -103,6 +117,39 @@ def when_label(due, now):
     if days_ahead < 7:
         return '{} {}'.format(weekday, time_text)
     return '{} {:02d}/{:02d}/{:04d} {}'.format(weekday, due.day, due.month, due.year, time_text)
+
+
+def next_property_order(values):
+    """
+    <summary>
+    The order in which _write_next_properties visits the Engage.Next.* property
+    names (without the prefix) for a given set of values.
+    </summary>
+    <param name="values">The property name to value dict being published; empty
+    when everything is being cleared.</param>
+    <returns>A list of names: the single set, then the numbered rows.</returns>
+    <remarks>
+    Publishing: the single set in NEXT_PROPERTY_NAMES order (Label last), then the
+    rows from NEXT_LIST_COUNT down to 1, each Episode, When, Label. Clearing: the
+    single set reversed (Label first, as it always has been), then rows 1 upwards,
+    each Label first, so each group is cleared in the reverse of its publish order.
+    A row with no Label in values is being cleared, so it takes the clearing order
+    within itself even during a publish: a row dropping off the end of the list
+    hides before its other two lines go.
+    </remarks>
+    """
+    if values:
+        names = list(NEXT_PROPERTY_NAMES)
+        rows = range(NEXT_LIST_COUNT, 0, -1)
+    else:
+        names = list(reversed(NEXT_PROPERTY_NAMES))
+        rows = range(1, NEXT_LIST_COUNT + 1)
+    for number in rows:
+        row = ['{}.{}'.format(number, name) for name in NEXT_LIST_NAMES]
+        if not values.get('{}.Label'.format(number)):
+            row.reverse()
+        names.extend(row)
+    return names
 
 
 def parse_kodi_datetime(text):
@@ -1218,6 +1265,23 @@ class EngageScheduler:
         <returns>A tuple (due, key) with the occurrence's datetime and its tracker key,
         or (None, None) when there is none within NEXT_LOOKAHEAD_DAYS.</returns>
         <remarks>
+        The first entry of _occurrences, which holds the rules.
+        </remarks>
+        """
+        found = self._occurrences(slot, now)
+        return found[0] if found else (None, None)
+
+    def _occurrences(self, slot, now):
+        """
+        <summary>
+        Every occurrence of a slot within the look ahead window that the scheduler has
+        not yet dealt with, earliest first.
+        </summary>
+        <param name="slot">An enabled slot.</param>
+        <param name="now">The current time.</param>
+        <returns>A list of (due, key) tuples, the occurrence's datetime and its tracker
+        key, empty when there is none within NEXT_LOOKAHEAD_DAYS.</returns>
+        <remarks>
         Walks today and the next NEXT_LOOKAHEAD_DAYS days. A one off date slot occurs on
         its date only; a weekly slot on each weekday in its list, at its hour and minute.
         An invalid date string falls back to the weekly days, as _get_scheduled_dt does.
@@ -1235,6 +1299,7 @@ class EngageScheduler:
             live_for = timedelta(hours=hours)
         else:
             live_for = timedelta(minutes=NEXT_GRACE_MINUTES)
+        found = []
         for offset in range(NEXT_LOOKAHEAD_DAYS + 1):
             day = (now + timedelta(days=offset)).date()
             if date_only is not None:
@@ -1248,8 +1313,8 @@ class EngageScheduler:
                 continue
             if due < now and now > due + live_for:
                 continue
-            return due, key
-        return None, None
+            found.append((due, key))
+        return found
 
     def _next_state(self, slot, due, key, now):
         """
@@ -1274,8 +1339,9 @@ class EngageScheduler:
     def _publish_next(self, reason, slots=None):
         """
         <summary>
-        Publish the next slot due as Engage.Next.* properties on the Home window, or
-        clear them when no enabled slot has an occurrence coming up.
+        Publish the next slot due as Engage.Next.* properties on the Home window and
+        the next NEXT_LIST_COUNT occurrences as Engage.Next.<n>.* rows, or clear them
+        all when no enabled slot has an occurrence coming up.
         </summary>
         <param name="reason">Why this publish is happening, for the log.</param>
         <param name="slots">The enabled Slot list when the caller already has it; read
@@ -1283,13 +1349,18 @@ class EngageScheduler:
         <remarks>
         Called at the end of every tick, after a slot save and after a library change.
         Does nothing until _wait_for_gui has finished, so Kodi's start-up is never
-        touched. Among all enabled slots the earliest next occurrence wins, first in
-        list order on a tie. Label is the slot's label, Episode the banner's episode
-        line (empty for a non-TV favourite), When the words from when_label; Day, Date
-        (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and Count (enabled slots) are
-        extras. Each property is written only when its value differs from what the
-        window already holds, see _write_next_properties. Any failure is logged and
-        swallowed: the skin block is a convenience and must never cost a prompt.
+        touched. Every occurrence of every enabled slot within the look ahead window
+        is gathered and sorted by due time, slots due at the same minute keeping their
+        list order. The earliest is the single set: Label is the slot's label, Episode
+        the banner's episode line (empty for a non-TV favourite), When the words from
+        when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
+        Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
+        numbered rows, each with its own Label, Episode and When; a number with no
+        occurrence is cleared. The episode line comes from the per slot cache, so a
+        slot on two days this week costs one lookup. Each property is written only
+        when its value differs from what the window already holds, see
+        _write_next_properties. Any failure is logged and swallowed: the skin block is
+        a convenience and must never cost a prompt.
         </remarks>
         """
         if not self._gui_ready:
@@ -1299,19 +1370,17 @@ class EngageScheduler:
                 now = datetime.now()
                 if slots is None:
                     slots = self._reload_slots()
-                best = None
-                for slot in slots:
-                    due, key = self._next_occurrence(slot, now)
-                    if due is None:
-                        continue
-                    if best is None or due < best[0]:
-                        best = (due, key, slot)
-                if best is None:
+                # sorted() is stable, so occurrences due at the same minute keep
+                # their slot list order, as the single set always has.
+                upcoming = sorted(
+                    ((due, key, slot) for slot in slots for due, key in self._occurrences(slot, now)),
+                    key=lambda entry: entry[0])
+                if not upcoming:
                     self._write_next_properties({}, reason)
                     return
-                due, key, slot = best
+                due, key, slot = upcoming[0]
                 episode_label, thumb = self._next_item_cached(slot)
-                self._write_next_properties({
+                values = {
                     'Label': slot.label,
                     'Episode': episode_label,
                     'When': when_label(due, now),
@@ -1322,7 +1391,13 @@ class EngageScheduler:
                     'SlotId': str(slot.id),
                     'State': self._next_state(slot, due, key, now),
                     'Count': str(len(slots)),
-                }, reason)
+                }
+                for number, (row_due, _, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
+                    row_episode, _ = self._next_item_cached(row_slot)
+                    values['{}.Label'.format(number)] = row_slot.label
+                    values['{}.Episode'.format(number)] = row_episode
+                    values['{}.When'.format(number)] = when_label(row_due, now)
+                self._write_next_properties(values, reason)
             except Exception:
                 import traceback
                 self._log('Publishing the next slot failed:\n{}'.format(
@@ -1334,23 +1409,25 @@ class EngageScheduler:
         Bring the Engage.Next.* Home window properties in line with values, touching
         only the ones that differ.
         </summary>
-        <param name="values">Property name (without the prefix) to value. A missing or
-        empty value clears that property; an empty dict clears them all.</param>
+        <param name="values">Property name (without the prefix) to value, numbered
+        rows as '3.Label' and so on. A missing or empty value clears that property; an
+        empty dict clears them all, numbered rows included.</param>
         <param name="reason">Why, for the log line.</param>
         <remarks>
         The window's current value is read back and compared before every write,
         rather than trusting a cache, because bursts of redundant Home window writes
         are implicated in a Kodi start-up crash seen by the Functional skin's own
         service and this must stay quiet when nothing has changed. Properties are
-        written in NEXT_PROPERTY_NAMES order when publishing (Label last) and in reverse
-        when clearing (Label first), so the skin's block, keyed on Label, never shows a
-        half-updated set. A change to Label or When is logged at info, the rest at debug.
+        visited in next_property_order: the single set Label last and the numbered
+        rows from the highest down to 1, each Label last, when publishing; the reverse,
+        Label first and row 1 first, when clearing. So a skin's block, keyed on Label,
+        and its list, keyed on row 1 and on each row's own label, never show a half
+        updated set. A change to any Label or When is logged at info, the rest at debug.
         </remarks>
         """
         window = xbmcgui.Window(HOME_WINDOW_ID)
-        order = NEXT_PROPERTY_NAMES if values else tuple(reversed(NEXT_PROPERTY_NAMES))
         changed = []
-        for name in order:
+        for name in next_property_order(values):
             prop = NEXT_PROPERTY_PREFIX + name
             value = values.get(name) or ''
             if window.getProperty(prop) == value:
@@ -1364,7 +1441,7 @@ class EngageScheduler:
             return
         summary = 'Next slot for skins ({}): {}'.format(
             reason, ', '.join('{}={!r}'.format(n, values.get(n) or '') for n in changed))
-        if 'Label' in changed or 'When' in changed:
+        if any(name.endswith(('Label', 'When')) for name in changed):
             self._log(summary)
         else:
             self._debug(summary)
