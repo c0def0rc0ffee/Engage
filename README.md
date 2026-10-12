@@ -41,13 +41,15 @@ Favourites and library.
   hand-built order (Arrow S3E1 to 3, then Flash S1E1 to 4, then back to Arrow) for
   interlinked series like the Arrowverse. Plays the next unwatched in your order.
 - 🍿 **Functional skin lists**, schedule one of the lists you build in the
-  Functional skin (a "Saturday Night Movie" list, say) and each showing plays
-  either the next unwatched item in the list's order or a random unwatched one.
-  The list stays in the skin: add, reorder or remove items there and the next
-  showing follows. Once everything in a random list is watched it picks from the
-  whole list again. A plain file or plugin item in a list has no watched count
-  Engage can read, so it is always treated as unwatched; turn on the list's
-  Remove Watched switch in the skin to have such items drop off once seen.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
+  Functional skin (a "Saturday Night Movie" list, say) and choose how each
+  showing picks from it: the next unwatched item in the list's order, every item
+  in turn whether watched or not (wrapping back to the top after the last), a
+  random unwatched item, or any item at random. The list stays in the skin: add,
+  reorder or remove items there and the next showing follows. Once everything in
+  a random unwatched list is watched it picks from the whole list again. A plain
+  file or plugin item in a list has no watched count Engage can read, so the
+  unwatched modes always treat it as unwatched; turn on the list's Remove
+  Watched switch in the skin to have such items drop off once seen.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
   *unwatched* episode (and skips season-0 specials until the main run is done).
   Plays it as a proper library/plugin item, so metadata and watched-tracking
   just work.

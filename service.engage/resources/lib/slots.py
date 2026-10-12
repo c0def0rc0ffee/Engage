@@ -238,6 +238,72 @@ def bump_catchup_count(key, today_str):
     return data[key]
 
 
+def _list_progress_path():
+    """
+    <summary>
+    Full path of list_progress.json, where 'every item in turn' list slots remember
+    the item they played last.
+    </summary>
+    <returns>The path.</returns>
+    """
+    return os.path.join(_data_dir(), 'list_progress.json')
+
+
+def get_list_progress(slot_id):
+    """
+    <summary>
+    What an 'every item in turn' list slot played last.
+    </summary>
+    <param name="slot_id">The slot's id.</param>
+    <returns>{'identity': [...], 'index': n}, or None when it has not played yet or
+    the file cannot be read.</returns>
+    <remarks>
+    Kept out of slots.json on purpose: the service writes this, and a write to
+    slots.json from the service could race a save from the Manage slots dialog,
+    which runs in its own interpreter. Keyed by slot id as a string, as JSON needs.
+    </remarks>
+    """
+    try:
+        with open(_list_progress_path(), 'r', encoding='utf-8') as f:
+            entry = json.load(f).get(str(slot_id))
+        return entry if isinstance(entry, dict) else None
+    except (OSError, IOError, ValueError, AttributeError):
+        return None
+
+
+def set_list_progress(slot_id, identity, index):
+    """
+    <summary>
+    Record the item an 'every item in turn' list slot has just played.
+    </summary>
+    <param name="slot_id">The slot's id.</param>
+    <param name="identity">functional_lists.item_identity of the item played.</param>
+    <param name="index">Its position in the list at the time.</param>
+    <remarks>
+    Written through a .tmp file and a rename, like slots.json. A failed write is
+    logged and swallowed: the worst case is the same item playing again next time.
+    Entries for deleted slots are left in place; they are a few bytes and are
+    harmless if a later slot reuses the id, which then just carries on from there.
+    </remarks>
+    """
+    path = _list_progress_path()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, IOError, ValueError):
+        data = {}
+    data[str(slot_id)] = {'identity': list(identity), 'index': int(index)}
+    try:
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except (OSError, IOError) as e:
+        _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
+
+
 def new_slot(favourite='', day='Monday'):
     """
     <summary>
@@ -289,8 +355,9 @@ def new_list_slot(list_name, mode, day='Monday'):
     Return a fresh slot that plays from one of the Functional skin's lists.
     </summary>
     <param name="list_name">The list's name as the skin shows it.</param>
-    <param name="mode">'next' for the first unwatched item in list order, 'random'
-    for a random unwatched one (see functional_lists.MODES).</param>
+    <param name="mode">One of functional_lists.MODES: 'next' (first unwatched in
+    list order), 'turn' (every item in turn), 'random' (a random unwatched item) or
+    'random_any' (any item at random).</param>
     <param name="day">The first weekday it runs on.</param>
     <returns>The slot dict, with an empty label so the list name is shown.</returns>
     <remarks>

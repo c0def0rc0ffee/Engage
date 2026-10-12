@@ -2,8 +2,9 @@
 """
 <summary>
 Unit test for slots that play from a Functional skin list and for the
-monthly and yearly repeats: reading the skin's lists.json, which item an in
-order or random list slot plays, that a random pick holds for its occurrence,
+monthly and yearly repeats: reading the skin's lists.json, which item each of
+the four list modes plays (in order or random, unwatched or any), that a
+random pick holds for its occurrence, that the in turn mode keeps its place,
 what the skin is shown, the recent watch lookup, and which days a weekly,
 monthly, yearly or one-shot slot runs on.
 </summary>
@@ -310,6 +311,64 @@ def test_random_mode():
     check(label in ('Alpha', 'Bravo', 'Charlie'), 'all watched still picks something')
 
 
+def test_random_any_mode():
+    """<summary>Random any includes watched items and still holds its pick per occurrence.</summary>"""
+    LIBRARY.clear()
+    movie(1, playcount=1)
+    movie(2)
+    write_lists([{'name': 'Films', 'items': [item('Alpha', dbid=1), item('Bravo', dbid=2)]}])
+    save_list_slot('Films', 'random_any')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    equal(sched._describe_slot(slot), ('Random pick', ''), 'no key: random any is not resolved')
+    seen = {sched._describe_slot(slot, '2026-10-17-1-{:04d}'.format(n))[0] for n in range(40)}
+    equal(seen, {'Alpha', 'Bravo'}, 'watched Alpha is in the draw too')
+    key = '2026-10-17-1-3000'
+    banner = sched._describe_slot(slot, key)[0]
+    del PLAYED[:]
+    sched._play_slot(slot, key)
+    equal(PLAYED, [{'movieid': {'Alpha': 1, 'Bravo': 2}[banner]}], 'random any plays what the banner named')
+
+
+def test_turn_index():
+    """<summary>The in turn walk: next after the last played, wrap, reorder and removal.</summary>"""
+    a, b, c = item('A', dbid=1), item('B', dbid=2), item('C', dbid=3)
+    ident = functional_lists.item_identity
+    equal(functional_lists.turn_index([a, b, c], None), 0, 'nothing played yet: first item')
+    equal(functional_lists.turn_index([a, b, c], {'identity': list(ident(a)), 'index': 0}), 1, 'after A comes B')
+    equal(functional_lists.turn_index([a, b, c], {'identity': list(ident(c)), 'index': 2}), 0, 'wraps after the last')
+    equal(functional_lists.turn_index([c, a, b], {'identity': list(ident(a)), 'index': 0}), 2,
+          'found by identity after a reorder')
+    equal(functional_lists.turn_index([a, c], {'identity': list(ident(b)), 'index': 1}), 1,
+          'B removed: the item that slid into its place plays')
+    equal(functional_lists.turn_index([a], {'identity': ['movie', 9], 'index': 4}), 0, 'old index wraps')
+    equal(functional_lists.turn_index([a, b], {'index': 'x'}), 0, 'unreadable progress: first item')
+
+
+def test_turn_mode():
+    """<summary>In turn plays every item, watched or not, one per showing, and remembers its place.</summary>"""
+    LIBRARY.clear()
+    movie(1, playcount=1)
+    movie(2, playcount=3)
+    write_lists([{'name': 'Films', 'items': [item('Alpha', dbid=1), item('Bravo', dbid=2),
+                                             item('Clip', dbtype='', file='/c.mkv')]}])
+    save_list_slot('Films', 'turn', slot_id=7)
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    equal(sched._describe_slot(slot), ('Alpha', 'thumb-Alpha'), 'starts at the top, watched or not')
+    del PLAYED[:]
+    for _ in range(4):
+        sched._play_slot(slot, 'k')
+    equal(PLAYED, [{'movieid': 1}, {'movieid': 2}, {'file': '/c.mkv'}, {'movieid': 1}],
+          'one item per showing, wrapping round')
+    equal(store.get_list_progress(7)['index'], 0, 'progress written after each play')
+    fresh = make_scheduler()
+    equal(fresh._describe_slot(fresh._reload_slots()[0])[0], 'Bravo', 'the place survives a restart')
+    sched._next_item_cache[7] = ('stale', 'x', '')
+    sched._play_slot(slot, 'k')
+    check(7 not in sched._next_item_cache, 'playing drops the published line so the next one shows')
+
+
 def test_recent_watch():
     """<summary>The recent watch check sees a list's library films and ignores the rest.</summary>"""
     LIBRARY.clear()
@@ -389,7 +448,7 @@ def test_monthly_occurrences():
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
-                 test_recent_watch, test_cache_signature, test_repeats, test_monthly_occurrences):
+                 test_random_any_mode, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_repeats, test_monthly_occurrences):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:

@@ -810,49 +810,64 @@ class EngageScheduler:
     def _resolve_list_item(self, slot, key=None):
         """
         <summary>
-        Choose what a list slot plays: the first unwatched item in list order, or for a
-        random slot a random unwatched one.
+        Choose what a list slot plays, by its mode: the first unwatched item in list
+        order, every item in turn, a random unwatched item, or any item at random.
         </summary>
         <param name="slot">A list slot whose list_items _reload_slots has filled.</param>
         <param name="key">The occurrence key when a banner or playback needs a definite
         item; None when only describing the slot.</param>
-        <returns>{'spec', 'label', 'art'} for the chosen item, None when an in order
-        list is all watched, or for a random slot asked without a key.</returns>
+        <returns>{'spec', 'label', 'art', 'identity', 'index'} for the chosen item, None
+        when an unwatched in order list is all watched, or for a random slot asked
+        without a key.</returns>
         <remarks>
-        A random slot picks among unwatched items and, once every item has been
-        watched, among all of them, so a rewatch list never runs dry. The pick is stored
+        The unwatched random mode picks among unwatched items and, once every item has
+        been watched, among all of them, so a rewatch list never runs dry; the any mode
+        picks among all of them every time. Either random pick is stored
         under the key and reused for that occurrence, so a snoozed banner comes back with
         the same film and Start plays the one the banner named. Without a key no pick is
         made, because the skin's Coming up block runs ahead of the banner and a pick made
         there would be forgotten on a restart; the describer shows 'Random pick' instead.
+        The in turn mode needs no key: its place only moves when _play_slot records a
+        play, so the banner and the playback name the same item anyway.
         </remarks>
         """
-        if slot.list_mode == functional_lists.MODE_RANDOM:
+        items = slot.list_items
+        if slot.list_mode in functional_lists.RANDOM_MODES:
             if key is None:
                 return None
             if key in self._list_picks:
                 return self._list_picks[key]
-            unwatched = [it for it in slot.list_items if not self._list_item_watched(it)]
-            choice = self._list_choice(random.choice(unwatched or slot.list_items))
+            pool = list(range(len(items)))
+            if slot.list_mode == functional_lists.MODE_RANDOM:
+                pool = [i for i in pool if not self._list_item_watched(items[i])] or pool
+            index = random.choice(pool)
+            choice = self._list_choice(items[index], index)
             self._list_picks[key] = choice
             return choice
-        for item in slot.list_items:
+        if slot.list_mode == functional_lists.MODE_TURN:
+            from resources.lib import slots as slot_store
+            index = functional_lists.turn_index(items, slot_store.get_list_progress(slot.id))
+            return self._list_choice(items[index], index)
+        for index, item in enumerate(items):
             if not self._list_item_watched(item):
-                return self._list_choice(item)
+                return self._list_choice(item, index)
         return None
 
-    def _list_choice(self, item):
+    def _list_choice(self, item, index):
         """
         <summary>
-        The play spec, banner line and poster for one list item.
+        The play spec, banner line and poster for one list item, with where it sits.
         </summary>
         <param name="item">One list item dict.</param>
-        <returns>{'spec', 'label', 'art'}; art is the thumb the skin captured, which may
-        be ''.</returns>
+        <param name="index">Its position in the list, recorded for the in turn mode.</param>
+        <returns>{'spec', 'label', 'art', 'identity', 'index'}; art is the thumb the skin
+        captured, which may be ''.</returns>
         """
         return {'spec': functional_lists.play_spec(item),
                 'label': functional_lists.item_label(item),
-                'art': item.get('thumb') or ''}
+                'art': item.get('thumb') or '',
+                'identity': functional_lists.item_identity(item),
+                'index': index}
 
     def _play_list_item(self, choice):
         """
@@ -886,6 +901,12 @@ class EngageScheduler:
                 self._log('Slot {}: playing "{}" from list "{}" ({})'.format(
                     slot.index + 1, item['label'], slot.list_name, slot.list_mode))
                 self._play_list_item(item)
+                if slot.list_mode == functional_lists.MODE_TURN:
+                    from resources.lib import slots as slot_store
+                    slot_store.set_list_progress(slot.id, item['identity'], item['index'])
+                    # The published line names the item just played until the
+                    # cache is dropped; the next tick then shows the one after.
+                    self._next_item_cache.pop(slot.id, None)
             else:
                 self._log('Slot {}: list all watched'.format(slot.index + 1))
                 xbmcgui.Dialog().notification(
@@ -1392,7 +1413,7 @@ class EngageScheduler:
             nxt = self._resolve_list_item(slot, key)
             if nxt:
                 episode_label, thumb = nxt['label'], nxt['art']
-            elif slot.list_mode == functional_lists.MODE_RANDOM:
+            elif slot.list_mode in functional_lists.RANDOM_MODES:
                 episode_label, thumb = 'Random pick', ''
             else:
                 episode_label, thumb = 'All watched', ''
