@@ -4,7 +4,8 @@
   Kodi settings definition for the add-on: one General category holding the
   read-only version field, the Manage slots action button, debug logging, the
   poll interval, the catch-up window and its prompt cap, the recent watch
-  window, the one-shot test mode and the favourites filter switch. Labels are plain text; the add-on
+  window, the one-shot test mode, the favourites filter switch and the switch for
+  the add-on API that the JellyStat dashboard uses. Labels are plain text; the add-on
   ships no strings.po.
   </summary>
 -->
@@ -24,6 +25,9 @@
     <setting id="recent_watch_hours" type="slider" label="Skip a slot watched in the last (hours, 0 = off)" default="4" range="0,1,24" option="int"/>
     <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
     <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
+    <!-- Starts Engage's add-on API (resources/lib/api_server.py), which listens on
+         this Kodi only and lets the JellyStat dashboard manage slots. -->
+    <setting id="api_enabled" type="bool" label="Allow JellyStat to manage slots" default="true"/>
   </category>
 
 </settings>
