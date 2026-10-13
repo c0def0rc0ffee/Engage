@@ -37,6 +37,10 @@ DATA_DIR = tempfile.mkdtemp(prefix='engage-list-test-')
 # (method, id) -> details dict the fake library returns.
 LIBRARY = {}
 PLAYED = []
+# tvshowid -> episode rows; seasonid -> {'tvshowid', 'season'}; episodeid -> playcount.
+EPISODES = {}
+SEASONS = {}
+EPISODE_PLAYS = {}
 NOTIFIED = []
 
 
@@ -60,6 +64,14 @@ def fake_jsonrpc(request):
         'VideoLibrary.GetMusicVideoDetails': ('musicvideoid', 'musicvideodetails'),
         'AudioLibrary.GetSongDetails': ('songid', 'songdetails'),
     }
+    if method == 'VideoLibrary.GetSeasonDetails':
+        details = SEASONS.get(params['seasonid'])
+        return json.dumps({'result': {'seasondetails': details}} if details else {'error': {}})
+    if method == 'VideoLibrary.GetEpisodes':
+        rows = [dict(row, playcount=EPISODE_PLAYS.get(row['episodeid'], 0))
+                for row in EPISODES.get(params['tvshowid'], [])
+                if 'season' not in params or row['season'] == params['season']]
+        return json.dumps({'result': {'episodes': rows}})
     if method in result_keys:
         id_key, result_key = result_keys[method]
         details = LIBRARY.get((method, params[id_key]))
@@ -475,6 +487,86 @@ def test_cache_signature():
     equal(sched._next_item_cached(sched._reload_slots()[0])[0], 'Bravo', 'reordered list re-resolves')
 
 
+def show_library():
+    """<summary>A show with Specials and two seasons of two episodes, listed out of order.</summary>"""
+    EPISODES.clear()
+    SEASONS.clear()
+    EPISODE_PLAYS.clear()
+    EPISODES[4] = [{'episodeid': 100 + s * 10 + e, 'title': 'Ep{}{}'.format(s, e), 'season': s,
+                    'episode': e, 'showtitle': 'Delta', 'file': '/d/{}x{}.mkv'.format(s, e), 'art': {}}
+                   for s, e in ((2, 1), (1, 2), (0, 1), (1, 1), (2, 2))]
+    SEASONS[20] = {'tvshowid': 4, 'season': 2}
+
+
+def test_group_rows():
+    """<summary>Whole show and season rows: kept, expanded, skipped, and drawn as one entry.</summary>"""
+    LIBRARY.clear()
+    show_library()
+    movie(1)
+    whole = item('Delta', dbtype='tvshow', dbid=4, show='Delta')
+    season = item('Delta, Season 2', dbtype='season', dbid=20, show='Delta', season='2', skip=['2x1'])
+    write_lists([{'name': 'Shows', 'items': [whole]}])
+    equal([it['label'] for it in functional_lists.load_lists()[0]['items']], ['Delta'],
+          'a whole show row is kept although it has no file')
+    save_list_slot('Shows', 'next')
+    sched = make_scheduler()
+    slots = sched._reload_slots()
+    equal(len(slots), 1, 'a list of only show rows is not skipped as empty')
+    slot = slots[0]
+    equal(sched._describe_slot(slot)[0], 'Delta · S01E01, Ep11', 'in order starts at S01E01, Specials left out')
+    EPISODE_PLAYS[111] = 1
+    del PLAYED[:]
+    sched._play_slot(slot, 'k')
+    equal(PLAYED, [{'episodeid': 112}], 'the next unwatched episode plays by library id')
+    equal(sched._list_row_labels(slot)[:3], ['Delta · S01E02, Ep12', 'Delta · S02E01, Ep21', 'Delta · S02E02, Ep22'],
+          'later showings name the episodes after it')
+    write_lists([{'name': 'Shows', 'items': [season]}])
+    slot = sched._reload_slots()[0]
+    equal([ep['dbid'] for ep in sched._flat_items(slot.list_items)], [122], 'a season row honours its skip list')
+    EPISODE_PLAYS[122] = 1
+    equal(sched._describe_slot(slot), ('All watched', ''), 'a watched season row is all watched')
+
+    save_list_slot('Shows', 'random')
+    write_lists([{'name': 'Shows', 'items': [whole, item('Alpha', dbid=1)]}])
+    EPISODE_PLAYS.clear()
+    EPISODE_PLAYS[111] = 1
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    seen = {sched._describe_slot(slot, '2026-10-17-1-{:04d}'.format(n))[0] for n in range(60)}
+    check('Alpha' in seen, 'the film is drawn')
+    check('Delta · S01E01, Ep11' not in seen, 'a watched episode is not drawn from the show')
+    check('Delta · S00E01, Ep01' not in seen, 'Specials are not drawn from a whole show')
+    check(len(seen - {'Alpha'}) >= 2, 'the show gives one of its unwatched episodes each time')
+
+
+def test_row_labels():
+    """<summary>Coming up rows: a random slot names its list, an in order slot its next items.</summary>"""
+    LIBRARY.clear()
+    movie(1, playcount=1)
+    movie(2)
+    movie(3)
+    films = [item('Alpha', dbid=1), item('Bravo', dbid=2), item('Charlie', dbid=3)]
+    write_lists([{'name': 'Saturday Night Movie', 'items': films}])
+    data = save_list_slot('saturday night movie', 'random')
+    data['label'] = 'Film night'
+    store.save_slots([data])
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    equal([sched._row_label(slot, n) for n in range(2)], ['Saturday Night Movie'] * 2,
+          'random: the list as the skin names it, every showing')
+    save_list_slot('Saturday Night Movie', 'next')
+    slot = sched._reload_slots()[0]
+    equal([sched._row_label(slot, n) for n in range(3)], ['Bravo', 'Charlie', 'Saturday Night Movie'],
+          'in order: the next unwatched items, then the slot label once they run out')
+    save_list_slot('Saturday Night Movie', 'turn', slot_id=8)
+    store.set_list_progress(8, functional_lists.item_identity(films[1]), 1)
+    slot = sched._reload_slots()[0]
+    equal([sched._row_label(slot, n) for n in range(4)], ['Charlie', 'Alpha', 'Bravo', 'Charlie'],
+          'in turn: on from the last played, wrapping')
+    other = scheduler.Slot(dict(store.new_slot(favourite='Voyager'), label='Voyager'))
+    equal(sched._row_label(other, 0), 'Voyager', 'a favourite slot keeps its label')
+
+
 # --- Repeats -----------------------------------------------------------------------
 
 def runs(data, *days):
@@ -530,7 +622,7 @@ def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
                  test_random_any_mode, test_series_pool, test_random_sequels,
-                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_repeats, test_monthly_occurrences):
+                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:

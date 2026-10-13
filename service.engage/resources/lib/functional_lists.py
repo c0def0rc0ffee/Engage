@@ -10,7 +10,10 @@ a slot refers to a list by name and reads it afresh each time, so items added,
 reordered or removed in the skin (including its Remove Watched switch) apply to
 the next slot without any sync step. The shape relied on is the skin's
 version 1 format: {"lists": [{"name": str, "items": [item, ...]}]}, each item
-carrying label, file, dbtype, dbid, thumb, show, season and episode. Anything
+carrying label, file, dbtype, dbid, thumb, show, season and episode. A whole
+show or season row (the skin's 0.22.0 and later) is a tvshow or season dbtype
+with a dbid, no file, and an optional skip list of "SxE" keys; it stands for
+its episodes, which the scheduler asks the library for at use. Anything
 else in the file is ignored. A missing or unreadable file reads as no lists;
 it is never repaired or moved from here, that is the skin's job.
 </remarks>
@@ -33,6 +36,11 @@ DBID_KEYS = {
     'musicvideo': 'musicvideoid',
     'song': 'songid',
 }
+
+# Row types the skin stores for a whole show or season. They have a dbid but
+# nothing Player.Open can take: the scheduler expands them into their episodes
+# (see is_group and episode_item).
+GROUP_TYPES = ('tvshow', 'season')
 
 # How a list slot chooses. The two unwatched modes skip what the library says
 # has been played; the two 'any' modes ignore watched state. MODE_TURN walks
@@ -160,7 +168,8 @@ def load_lists():
     <remarks>
     Entries without a name are dropped, and items that are not dicts or carry
     neither a file nor a dbid are dropped, mirroring the skin's own clean up so
-    a hand edited file cannot hand the player an empty item.
+    a hand edited file cannot hand the player an empty item. A whole show or
+    season row is kept on its dbid alone.
     </remarks>
     """
     path = lists_path()
@@ -182,7 +191,7 @@ def load_lists():
         if not name:
             continue
         items = [it for it in (entry.get('items') or [])
-                 if isinstance(it, dict) and (it.get('file') or _dbid(it))]
+                 if isinstance(it, dict) and (it.get('file') or _dbid(it) or is_group(it))]
         out.append({'name': name, 'items': items})
     return out
 
@@ -220,6 +229,64 @@ def _dbid(item):
         return int(item.get('dbid') or 0)
     except (ValueError, TypeError):
         return 0
+
+
+def is_group(item):
+    """
+    <summary>
+    Whether a list item is a whole show or season row rather than one thing to play.
+    </summary>
+    <param name="item">One list item dict.</param>
+    <returns>True for a tvshow or season row with a usable dbid.</returns>
+    """
+    if item.get('dbtype') not in GROUP_TYPES:
+        return False
+    try:
+        return int(item.get('dbid') or 0) > 0
+    except (ValueError, TypeError):
+        return False
+
+
+def episode_key(season, episode):
+    """
+    <summary>
+    The "season x episode" key a group row's skip list uses.
+    </summary>
+    <param name="season">The season number.</param>
+    <param name="episode">The episode number.</param>
+    <returns>A string such as '2x5', the same form the skin writes.</returns>
+    """
+    try:
+        return '{}x{}'.format(int(season or 0), int(episode or 0))
+    except (ValueError, TypeError):
+        return '0x0'
+
+
+def episode_item(row, group):
+    """
+    <summary>
+    One episode of a whole show or season row, in the shape of a list item.
+    </summary>
+    <param name="row">An episode from VideoLibrary.GetEpisodes, with title, file,
+    season, episode, showtitle, art, thumbnail and playcount.</param>
+    <param name="group">The group row it came from, for the fallback poster.</param>
+    <returns>A list item dict for the episode, carrying its library playcount under
+    'engage_playcount' so the scheduler need not ask for it again; the skin never
+    writes that key, so a stored item cannot carry a stale one.</returns>
+    """
+    art = row.get('art') or {}
+    return {
+        'label': row.get('title') or row.get('label') or '',
+        'file': row.get('file') or '',
+        'dbtype': 'episode',
+        'dbid': int(row.get('episodeid') or 0),
+        'thumb': (art.get('tvshow.poster') or art.get('season.poster')
+                  or group.get('thumb') or row.get('thumbnail') or ''),
+        'show': row.get('showtitle') or group.get('show') or '',
+        'season': str(row.get('season', '')),
+        'episode': str(row.get('episode', '')),
+        'engage_playcount': int(row.get('playcount') or 0),
+    }
 
 
 def play_spec(item):
@@ -285,11 +352,14 @@ def item_identity(item):
     A hashable identity for one item, for cache signatures.
     </summary>
     <param name="item">One list item dict.</param>
-    <returns>(dbtype, dbid) for a library item, ('file', path) otherwise.</returns>
+    <returns>(dbtype, dbid) for a library item or a whole show or season row,
+    ('file', path) otherwise.</returns>
     """
     dbid = _dbid(item)
     if dbid:
         return (item.get('dbtype'), dbid)
+    if is_group(item):
+        return (item['dbtype'], int(item['dbid']))
     return ('file', item.get('file') or '')
 
 
