@@ -54,15 +54,23 @@ TIMEOUT_ACTION_SHORT = {
 }
 
 
-# How a slot repeats. Weekly uses the 'days' list; monthly uses 'month_day';
-# yearly uses 'month' and 'month_day'. A one-shot 'date' overrides all three.
+# How a slot repeats. Weekly uses the 'days' list; every few weeks uses 'days',
+# 'week_interval' and 'week_start'; monthly uses 'month_day'; yearly uses
+# 'month' and 'month_day'. A one-shot 'date' overrides them all.
 # Slots saved before this setting existed carry no key and are weekly.
 REPEAT_WEEKLY = 'weekly'
+REPEAT_EVERY_WEEKS = 'every_weeks'
 REPEAT_MONTHLY = 'monthly'
 REPEAT_YEARLY = 'yearly'
 DEFAULT_REPEAT = REPEAT_WEEKLY
 # Order here is the order the picker shows them in.
-REPEATS = [REPEAT_WEEKLY, REPEAT_MONTHLY, REPEAT_YEARLY]
+REPEATS = [REPEAT_WEEKLY, REPEAT_EVERY_WEEKS, REPEAT_MONTHLY, REPEAT_YEARLY]
+# The gaps an every few weeks slot can have, in weeks.
+WEEK_INTERVALS = [2, 3, 4]
+# The Monday an every few weeks slot counts from when its own is missing or
+# unreadable, which only a hand edited slots.json can cause; the picker always
+# stores one.
+FALLBACK_WEEK_START = '2024-01-01'
 MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
                'August', 'September', 'October', 'November', 'December']
 
@@ -77,6 +85,59 @@ def repeat_of(slot):
     """
     repeat = (slot.get('repeat') or '').strip()
     return repeat if repeat in REPEATS else DEFAULT_REPEAT
+
+
+def week_interval_of(slot):
+    """
+    <summary>
+    How many weeks apart an every few weeks slot runs.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>One of WEEK_INTERVALS; a missing or unknown value gives 2.</returns>
+    """
+    try:
+        weeks = int(slot.get('week_interval') or 2)
+    except (ValueError, TypeError):
+        return 2
+    return weeks if weeks in WEEK_INTERVALS else 2
+
+
+def week_start_of(slot):
+    """
+    <summary>
+    The Monday of the first week an every few weeks slot runs in.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>A date, always a Monday: the stored 'week_start' moved back to its
+    Monday, or FALLBACK_WEEK_START when it is missing or not a YYYY-MM-DD date.</returns>
+    """
+    from datetime import date, timedelta
+    try:
+        day = date(*[int(p) for p in str(slot.get('week_start') or '').split('-')])
+    except (ValueError, TypeError):
+        day = date(*[int(p) for p in FALLBACK_WEEK_START.split('-')])
+    return day - timedelta(days=day.weekday())
+
+
+def in_week_cycle(day, week_start, interval):
+    """
+    <summary>
+    Whether a date falls in one of an every few weeks slot's on weeks.
+    </summary>
+    <param name="day">The date to test.</param>
+    <param name="week_start">The Monday of an on week, from week_start_of.</param>
+    <param name="interval">Weeks between on weeks, from week_interval_of.</param>
+    <returns>True when the date's week is a whole number of intervals from the start
+    week, before or after it.</returns>
+    <remarks>
+    Only the week is tested; the caller checks the weekday against the slot's days.
+    Weeks before the start count too, which only matters for a start week chosen in
+    the future: the slot then also runs in the on weeks leading up to it, keeping the
+    same rhythm.
+    </remarks>
+    """
+    monday = day.toordinal() - day.weekday()
+    return ((monday - week_start.toordinal()) // 7) % interval == 0
 
 
 def month_day_of(slot):
@@ -375,7 +436,7 @@ def new_slot(favourite='', day='Monday'):
         'kind': 'favourite',   # 'favourite', 'sequence' or 'list'
         'favourite': favourite,
         'days': [day],         # one or more weekday names
-        'repeat': DEFAULT_REPEAT,  # 'weekly', 'monthly' or 'yearly'
+        'repeat': DEFAULT_REPEAT,  # one of REPEATS
         'month_day': 1,        # monthly and yearly: day of the month
         'month': 1,            # yearly: month, 1 to 12
         'date': '',

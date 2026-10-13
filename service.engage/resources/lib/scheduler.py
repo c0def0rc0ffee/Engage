@@ -213,9 +213,11 @@ class Slot:
         # Multiple days supported via 'days'; fall back to legacy single 'day'.
         self.days = data.get('days') or ([data['day']] if data.get('day') else ['Monday'])
         self.specific_date = (data.get('date') or '').strip()
-        # Weekly (the days above), monthly or yearly; see runs_on.
+        # Weekly (the days above), every few weeks, monthly or yearly; see runs_on.
         from resources.lib import slots as repeat_store
         self.repeat = repeat_store.repeat_of(data)
+        self.week_interval = repeat_store.week_interval_of(data)
+        self.week_start = repeat_store.week_start_of(data)
         self.month_day = repeat_store.month_day_of(data)
         self.month = repeat_store.month_of(data)
         self.hour = int(data.get('hour', 19))
@@ -277,7 +279,8 @@ class Slot:
         Monthly runs on month_day, moved to the last day of a shorter month, so the
         31st runs on 30th April and 28th or 29th February. Yearly runs on month_day of
         month with the same move, so 29th February runs on the 28th outside leap years.
-        Weekly runs on the days list.
+        Every few weeks runs on the days list in the weeks that are a whole number of
+        week_interval weeks from week_start. Weekly runs on the days list.
         </remarks>
         """
         target_date = self.parsed_date()
@@ -290,6 +293,9 @@ class Slot:
             if day.month != self.month:
                 return False
             return day.day == min(self.month_day, repeat_store.last_day_of_month(day.year, day.month))
+        if self.repeat == repeat_store.REPEAT_EVERY_WEEKS:
+            if not repeat_store.in_week_cycle(day, self.week_start, self.week_interval):
+                return False
         return day.weekday() in self.day_indexes()
 
     def parsed_date(self):
@@ -477,7 +483,7 @@ class EngageScheduler:
         </summary>
         <remarks>
         Whether today counts is Slot.runs_on: a one-shot date, else the weekly days,
-        the monthly day or the yearly date.
+        the days of an on week for every few weeks, the monthly day or the yearly date.
         </remarks>
         """
         now = datetime.now()

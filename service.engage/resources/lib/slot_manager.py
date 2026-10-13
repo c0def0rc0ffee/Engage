@@ -888,11 +888,80 @@ def _pick_days(current):
     return [DAY_NAMES[i] for i in sel]
 
 
+def _first_in_cycle(days, week_start, interval, today):
+    """
+    <summary>
+    The first date on or after today that an every few weeks slot runs.
+    </summary>
+    <param name="days">The slot's weekday names.</param>
+    <param name="week_start">The Monday of an on week.</param>
+    <param name="interval">Weeks between on weeks.</param>
+    <param name="today">The date to search from.</param>
+    <returns>The date, or None when no days are chosen.</returns>
+    <remarks>
+    Date only: a run earlier today whose time has already passed still counts, so a
+    slot made on its own day shows today rather than the next on week.
+    </remarks>
+    """
+    from datetime import timedelta
+    wanted = [DAY_NAMES.index(d) for d in days if d in DAY_NAMES]
+    for n in range(7 * interval):
+        day = today + timedelta(days=n)
+        if day.weekday() in wanted and store.in_week_cycle(day, week_start, interval):
+            return day
+    return None
+
+
+def _short_date(day):
+    """
+    <summary>
+    A date as 'Tue 14/10/2026', for the every few weeks picker and summary.
+    </summary>
+    <param name="day">The date.</param>
+    <returns>The text, weekday from DAY_NAMES so it does not depend on the locale.</returns>
+    """
+    return '{} {:02d}/{:02d}/{}'.format(DAY_NAMES[day.weekday()][:3], day.day, day.month, day.year)
+
+
+def _pick_week_start(days, interval, current_start):
+    """
+    <summary>
+    Ask which week an every few weeks slot starts in, by the date it first runs.
+    </summary>
+    <param name="days">The weekday names already chosen.</param>
+    <param name="interval">Weeks between on weeks.</param>
+    <param name="current_start">The slot's present start Monday, so its rhythm is
+    preselected when the slot is edited; None for a slot that has none yet, which
+    preselects this week.</param>
+    <returns>The Monday of the chosen week as 'YYYY-MM-DD', or None when the user
+    backed out.</returns>
+    <remarks>
+    One choice per week of the cycle, this week first, each labelled with the first
+    date it would run, so 'every other Tuesday' becomes a choice between this Tuesday
+    and next Tuesday. When this week's days have already gone, that choice's first
+    run is a whole cycle away, and its label says so by its date.
+    </remarks>
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    this_monday = today - timedelta(days=today.weekday())
+    mondays = [this_monday + timedelta(weeks=k) for k in range(interval)]
+    labels, pre = [], 0
+    for k, monday in enumerate(mondays):
+        first = _first_in_cycle(days, monday, interval, today)
+        labels.append('{}, then every {} weeks'.format(_short_date(first) if first else '?', interval))
+        if current_start and store.in_week_cycle(monday, current_start, interval):
+            pre = k
+    idx = xbmcgui.Dialog().select('First showing', labels, preselect=pre)
+    return mondays[idx].isoformat() if idx >= 0 else None
+
+
 def _schedule_text(slot, with_date=True):
     """
     <summary>
     How often a slot runs, in words: 'Weekly on Mon,Wed', 'Every day',
-    'Monthly on the 15th' or 'Yearly on 25th December'.
+    'Every 2 weeks on Tue, next Tue 27/10/2026', 'Monthly on the 15th' or
+    'Yearly on 25th December'.
     </summary>
     <param name="slot">A slot dict.</param>
     <param name="with_date">When true and a one-shot date is set, describe that
@@ -911,25 +980,34 @@ def _schedule_text(slot, with_date=True):
     if repeat == store.REPEAT_YEARLY:
         return 'Yearly on {} {}'.format(store.ordinal(day), store.MONTH_NAMES[store.month_of(slot) - 1])
     days = _days_abbrev(store.days_of(slot))
+    if repeat == store.REPEAT_EVERY_WEEKS:
+        from datetime import date
+        interval = store.week_interval_of(slot)
+        first = _first_in_cycle(store.days_of(slot), store.week_start_of(slot), interval, date.today())
+        on = 'every day' if days == 'Every day' else 'on {}'.format(days)
+        nxt = ', next {}'.format(_short_date(first)) if first else ''
+        return 'Every {} weeks {}{}'.format(interval, on, nxt)
     return days if days == 'Every day' else 'Weekly on {}'.format(days)
 
 
 def _pick_schedule(slot):
     """
     <summary>
-    Ask how a slot repeats (weekly, monthly or yearly), then for the days, the day of
-    the month, or the date.
+    Ask how a slot repeats (weekly, every few weeks, monthly or yearly), then for the
+    days, the gap and first showing, the day of the month, or the date.
     </summary>
     <param name="slot">The slot dict, read for the current values to preselect.</param>
-    <returns>The fields to merge into the slot ('repeat' plus 'days', or 'month_day',
-    or 'month' and 'month_day'), or None when the user backed out.</returns>
+    <returns>The fields to merge into the slot ('repeat' plus 'days'; or 'days',
+    'week_interval' and 'week_start'; or 'month_day'; or 'month' and 'month_day'), or
+    None when the user backed out.</returns>
     <remarks>
     The other repeat's fields are left as they were, so switching back restores the
     old days. A one-shot date still wins over whatever is chosen here, and the user is
     told so when one is set.
     </remarks>
     """
-    labels = ['Weekly, on chosen days', 'Monthly, on a day of the month', 'Yearly, on a date']
+    labels = ['Weekly, on chosen days', 'Every few weeks, e.g. every other Tuesday',
+              'Monthly, on a day of the month', 'Yearly, on a date']
     current = store.repeat_of(slot)
     idx = xbmcgui.Dialog().select('Repeats', labels, preselect=store.REPEATS.index(current))
     if idx < 0:
@@ -940,6 +1018,22 @@ def _pick_schedule(slot):
         if not days:
             return None
         result = {'repeat': repeat, 'days': days}
+    elif repeat == store.REPEAT_EVERY_WEEKS:
+        intervals = store.WEEK_INTERVALS
+        current = store.week_interval_of(slot)
+        w_idx = xbmcgui.Dialog().select('How often', ['Every {} weeks'.format(n) for n in intervals],
+                                        preselect=intervals.index(current))
+        if w_idx < 0:
+            return None
+        interval = intervals[w_idx]
+        days = _pick_days(store.days_of(slot))
+        if not days:
+            return None
+        start = _pick_week_start(days, interval,
+                                 store.week_start_of(slot) if slot.get('week_start') else None)
+        if start is None:
+            return None
+        result = {'repeat': repeat, 'days': days, 'week_interval': interval, 'week_start': start}
     elif repeat == store.REPEAT_MONTHLY:
         day = _pick_month_day(store.month_day_of(slot), 31, 'Day of the month',
                               'last day in shorter months', 29)

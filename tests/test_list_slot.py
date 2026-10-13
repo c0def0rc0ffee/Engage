@@ -2,12 +2,12 @@
 """
 <summary>
 Unit test for slots that play from a Functional skin list and for the
-monthly and yearly repeats: reading the skin's lists.json, which item each of
+every few weeks, monthly and yearly repeats: reading the skin's lists.json, which item each of
 the four list modes plays (in order or random, unwatched or any), that a
 random pick holds for its occurrence, that the optional sequels in order switch
 keeps a movie set from jumping ahead, that the in turn mode keeps its place,
 what the skin is shown, the recent watch lookup, and which days a weekly,
-monthly, yearly or one-shot slot runs on.
+every few weeks, monthly, yearly or one-shot slot runs on.
 </summary>
 <remarks>
 Run by build-zip.sh before anything is zipped; exits non zero on the first
@@ -576,10 +576,26 @@ def runs(data, *days):
 
 
 def test_repeats():
-    """<summary>Weekly, monthly, yearly and one-shot rules, short months included.</summary>"""
+    """<summary>Weekly, every few weeks, monthly, yearly and one-shot rules, short months included.</summary>"""
     weekly = store.new_slot(favourite='X', day='Saturday')
     equal(runs(weekly, date(2026, 10, 17), date(2026, 10, 18)), [date(2026, 10, 17)], 'weekly Saturday')
     equal(scheduler.Slot({'days': ['Monday']}).repeat, 'weekly', 'old slots without the key are weekly')
+
+    # 13/10/2026 is a Tuesday; the start week is any day of that week, moved to Monday.
+    fortnight = dict(store.new_slot(favourite='X', day='Tuesday'), repeat='every_weeks',
+                     week_interval=2, week_start='2026-10-15')
+    equal(runs(fortnight, date(2026, 10, 6), date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 20),
+               date(2026, 10, 27), date(2026, 11, 3), date(2026, 11, 10)),
+          [date(2026, 10, 13), date(2026, 10, 27), date(2026, 11, 10)], 'every other Tuesday')
+    check(date(2026, 9, 29) in runs(fortnight, date(2026, 9, 29)), 'the rhythm holds before the start week')
+    three = dict(fortnight, week_interval=3, days=['Tuesday', 'Friday'])
+    equal(runs(three, date(2026, 10, 13), date(2026, 10, 16), date(2026, 10, 20), date(2026, 10, 27),
+               date(2026, 11, 3), date(2026, 11, 6)),
+          [date(2026, 10, 13), date(2026, 10, 16), date(2026, 11, 3), date(2026, 11, 6)],
+          'every three weeks on two days')
+    odd = scheduler.Slot(dict(fortnight, week_interval=9, week_start='soon'))
+    equal((odd.week_interval, odd.week_start), (2, date(2024, 1, 1)), 'bad interval and start fall back')
+    equal(store.week_start_of({'week_start': '2026-10-18'}), date(2026, 10, 12), 'a Sunday start is its Monday')
 
     monthly = dict(store.new_slot(favourite='X'), repeat='monthly', month_day=15)
     equal(runs(monthly, date(2026, 10, 14), date(2026, 10, 15), date(2026, 11, 15)),
