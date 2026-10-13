@@ -1967,6 +1967,50 @@ class EngageScheduler:
             if method == 'VideoLibrary.OnUpdate' and '"playcount"' in (data or ''):
                 self._publish_async('watched state changed')
 
+    def _on_settings_changed(self):
+        """
+        <summary>
+        Start or stop the add-on API when its setting is changed.
+        </summary>
+        <remarks>
+        Ignored until the GUI is up: run() starts the API then, and must be the first
+        to write the Home window (see __init__).
+        </remarks>
+        """
+        if self._gui_ready:
+            self._sync_api()
+
+    def _sync_api(self):
+        """
+        <summary>
+        Bring the add-on API in line with its setting (api_server.sync).
+        </summary>
+        <remarks>
+        Imported here rather than at the top so the scheduler's tests need no HTTP
+        server. Any failure is logged and swallowed: the API is an extra and must never
+        stop slots firing.
+        </remarks>
+        """
+        try:
+            from resources.lib import api_server
+            api_server.sync()
+        except Exception:
+            import traceback
+            self._log('Add-on API could not start:\n{}'.format(traceback.format_exc()), xbmc.LOGERROR)
+
+    def _stop_api(self):
+        """
+        <summary>
+        Stop the add-on API if it is running, logging rather than raising on failure.
+        </summary>
+        """
+        try:
+            from resources.lib import api_server
+            api_server.stop()
+        except Exception:
+            import traceback
+            self._log('Add-on API did not stop cleanly:\n{}'.format(traceback.format_exc()), xbmc.LOGWARNING)
+
     def _publish_async(self, reason):
         """
         <summary>
@@ -2045,11 +2089,15 @@ class EngageScheduler:
         30. An exception inside a tick is logged with its traceback and the loop carries
         on, because the service is expected to run for days between restarts. However
         the loop ends, the Engage.Next.* Home window properties are cleared on the way
-        out so a skin does not keep showing a slot nobody is watching for.
+        out so a skin does not keep showing a slot nobody is watching for. The add-on API
+        starts once the GUI is up, for the same Home window reason, and stops on the way
+        out.
         </remarks>
         """
         self._log('Scheduler loop starting')
         self._wait_for_gui()
+        if self._gui_ready:
+            self._sync_api()
 
         try:
             while not self.monitor.abortRequested():
@@ -2069,6 +2117,7 @@ class EngageScheduler:
                 if self.monitor.waitForAbort(poll_interval):
                     break
         finally:
+            self._stop_api()
             self._clear_next()
 
         self._log('Scheduler loop ended')
@@ -2301,3 +2350,12 @@ class _EngageMonitor(xbmc.Monitor):
         <param name="data">The payload as a JSON string.</param>
         """
         self._scheduler._on_notification(sender, method, data)
+
+    def onSettingsChanged(self):
+        """
+        <summary>
+        Kodi callback after the add-on's settings are saved; forwards to the scheduler
+        so the add-on API follows its setting without a restart.
+        </summary>
+        """
+        self._scheduler._on_settings_changed()

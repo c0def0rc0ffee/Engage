@@ -653,10 +653,26 @@ def restore_backup(file_path):
     Raises ValueError if the file isn't a recognised Engage backup.
     </summary>
     """
-    import xbmcaddon
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+    count = restore_backup_data(data)
+    _log('restored backup ({} slots) from {}'.format(count, file_path))
+    return count
 
+
+def restore_backup_data(data):
+    """
+    <summary>
+    Restore slots + settings from an already parsed backup document. Returns slot count
+    restored. Raises ValueError if it isn't a recognised Engage backup.
+    </summary>
+    <param name="data">The document, as build_backup makes it.</param>
+    <remarks>
+    Shared by restore_backup (a file chosen in Kodi) and the add-on API's POST
+    /restore, which checks the document's shape more closely before calling this.
+    </remarks>
+    """
+    import xbmcaddon
     if not isinstance(data, dict) or data.get('type') != 'engage-backup':
         raise ValueError('Not an Engage backup file')
 
@@ -670,7 +686,6 @@ def restore_backup(file_path):
         except Exception:
             pass
 
-    _log('restored backup ({} slots) from {}'.format(len(slots), file_path))
     return len(slots)
 
 

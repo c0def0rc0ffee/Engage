@@ -119,6 +119,7 @@ Configure**) and choose **Manage slots…**
 | **Show all favourites in pickers** | Off = only video/TV favourites are listed |
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
 | **Test mode** | Fire all enabled slots immediately (handy for testing) |
+| **Allow JellyStat to manage slots** | On by default. Lets the JellyStat add-on's web dashboard on the same Kodi list, add, edit and delete slots and take or restore a backup. Engage listens on this Kodi only, never on the network; JellyStat's own password guards the dashboard |
 
 ## For skinners
 
@@ -181,6 +182,8 @@ service.engage/
    │  ├─ prompt.py        the countdown banner (WindowXMLDialog)
    │  ├─ slots.py         JSON slot store + backup/restore
    │  ├─ slot_manager.py  dialog-driven slot management UI
+   │  ├─ slot_rules.py    slot validation and the API shape of a slot
+   │  ├─ api_server.py    loopback API the JellyStat dashboard manages slots through
    │  └─ favourites_ui.py favourites picker / add / remove
    └─ skins/Default/      banner skin + textures
 ```
