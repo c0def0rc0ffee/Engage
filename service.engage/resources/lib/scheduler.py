@@ -61,7 +61,11 @@ NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
 # as the single set. One slot can appear more than once, a weekly slot on two
 # days this week for instance; that is wanted. A number with no occurrence has
 # both properties cleared. The rows carry no episode line: the list shows the
-# slot's title only, and only the single set keeps Episode for the block.
+# slot's title only, and only the single set keeps Episode for the block. A
+# Functional list slot is the exception (13/10/2026): its row names the list
+# when the slot picks at random, and the item it will play when it plays in
+# order, a later showing of the same slot naming the item after that. See
+# _row_label.
 # Label is last here for the same reason as above: a row is written Label
 # last and cleared Label first, rows are written from NEXT_LIST_COUNT down to
 # 1 and cleared from 1 upwards, so a skin that gates its list on row 1 and
@@ -242,6 +246,9 @@ class Slot:
         self.list_mode = functional_lists.mode_of(data)
         self.list_sequels = functional_lists.sequels_of(data)
         self.list_items = []
+        # The list's name as the skin spells it, for the Coming up rows of a
+        # random slot; filled by _reload_slots with list_items.
+        self.list_title = self.list_name
 
     def day_indexes(self):
         """
@@ -363,6 +370,9 @@ class EngageScheduler:
         # Home window writes during Kodi's start-up are implicated in a crash
         # seen by the Functional skin's own service.
         self._next_item_cache = {}
+        # The Coming up row labels of each list slot, keyed and signed like
+        # _next_item_cache and cleared with it; see _list_row_labels.
+        self._next_rows_cache = {}
         self._publish_lock = threading.Lock()
         self._gui_ready = False
 
@@ -427,6 +437,7 @@ class EngageScheduler:
                 # disappearance is logged again.
                 self._warned_misconfig.discard(slot.id)
                 slot.list_items = found['items']
+                slot.list_title = found['name']
                 if not slot.label:
                     slot.label = found['name']
             elif slot.kind == 'sequence':
@@ -788,9 +799,15 @@ class EngageScheduler:
         library id that no longer resolves counts as unwatched, so it stays playable. In
         'next' mode that means such an item at the head of the list is offered every
         time; the skin's Remove Watched switch on the list, which tracks plain files by
-        playback progress, is the way to move past it.
+        playback progress, is the way to move past it. An episode expanded from a whole
+        show or season row already carries its playcount; the row itself counts as
+        watched once every episode in it has been, or when it has none left.
         </remarks>
         """
+        if 'engage_playcount' in item:
+            return item['engage_playcount'] > 0
+        if functional_lists.is_group(item):
+            return all(self._list_item_watched(ep) for ep in self._group_episodes(item))
         spec = functional_lists.play_spec(item) or {}
         lookups = {
             'movieid': ('VideoLibrary.GetMovieDetails', 'moviedetails'),
@@ -834,6 +851,12 @@ class EngageScheduler:
         item of each series (see _list_series and functional_lists.series_pool), and
         the choice carries a 'series' entry so _play_slot can record that series'
         place.
+        A whole show or season row is, as in the skin's own Port modes, every one of
+        its episodes in order for the two in order modes, and ONE entry in a random
+        draw that plays one of its episodes: an unwatched one for the unwatched mode
+        while there is one, any of them otherwise. A row whose show or season has
+        gone from the library, or whose episodes the skin's Remove Watched has all
+        taken out, is left out.
         </remarks>
         """
         items = slot.list_items
@@ -842,7 +865,11 @@ class EngageScheduler:
                 return None
             if key in self._list_picks:
                 return self._list_picks[key]
-            pool = list(range(len(items)))
+            groups = {i: self._group_episodes(it) for i, it in enumerate(items)
+                      if functional_lists.is_group(it)}
+            pool = [i for i in range(len(items)) if groups.get(i, True)]
+            if not pool:
+                return None
             unwatched = []
             if slot.list_mode == functional_lists.MODE_RANDOM:
                 unwatched = [i for i in pool if not self._list_item_watched(items[i])]
@@ -856,10 +883,19 @@ class EngageScheduler:
                 progress = None if unwatched else slot_store.get_series_progress(slot.id)
                 pool = functional_lists.series_pool(items, pool, series, progress) or pool
             index = random.choice(pool)
-            choice = self._list_choice(items[index], index)
+            if index in groups:
+                episodes = groups[index]
+                if slot.list_mode == functional_lists.MODE_RANDOM:
+                    episodes = [ep for ep in episodes if not self._list_item_watched(ep)] or episodes
+                choice = self._list_choice(random.choice(episodes), index)
+            else:
+                choice = self._list_choice(items[index], index)
             choice['series'] = functional_lists.series_position(items, series, index)
             self._list_picks[key] = choice
             return choice
+        items = self._flat_items(items)
+        if not items:
+            return None
         if slot.list_mode == functional_lists.MODE_TURN:
             from resources.lib import slots as slot_store
             index = functional_lists.turn_index(items, slot_store.get_list_progress(slot.id))
@@ -868,6 +904,136 @@ class EngageScheduler:
             if not self._list_item_watched(item):
                 return self._list_choice(item, index)
         return None
+
+    def _group_episodes(self, item):
+        """
+        <summary>
+        The episodes a whole show or season row stands for, in order.
+        </summary>
+        <param name="item">A tvshow or season row from the skin's list.</param>
+        <returns>List item dicts from functional_lists.episode_item, sorted by season
+        then episode; empty when the show or season is no longer in the library.</returns>
+        <remarks>
+        Worked out the way the skin's own service does it, so Engage and the skin's
+        Port agree on what a row holds: a whole show leaves out season 0 (Specials), a
+        season row is that season in full, and any episode in the row's skip list
+        (taken out by the skin's Remove Watched) is dropped. Asked of the library each
+        time, so episodes added since the row was made are included.
+        </remarks>
+        """
+        params = {'properties': ['title', 'file', 'season', 'episode', 'showtitle',
+                                 'art', 'thumbnail', 'playcount']}
+        if item.get('dbtype') == 'tvshow':
+            params['tvshowid'] = int(item['dbid'])
+            season = None
+        else:
+            data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                'jsonrpc': '2.0', 'method': 'VideoLibrary.GetSeasonDetails',
+                'params': {'seasonid': int(item['dbid']), 'properties': ['tvshowid', 'season']},
+                'id': 1
+            })))
+            details = data.get('result', {}).get('seasondetails') or {}
+            if not details.get('tvshowid') or details.get('season') is None:
+                return []
+            params['tvshowid'] = int(details['tvshowid'])
+            season = int(details['season'])
+            params['season'] = season
+        data = json.loads(xbmc.executeJSONRPC(json.dumps({
+            'jsonrpc': '2.0', 'method': 'VideoLibrary.GetEpisodes', 'params': params, 'id': 1
+        })))
+        rows = data.get('result', {}).get('episodes') or []
+        skip = set(item.get('skip') or [])
+        episodes = []
+        for row in rows:
+            try:
+                numbers = (int(row.get('season') or 0), int(row.get('episode') or 0))
+            except (ValueError, TypeError):
+                numbers = (0, 0)
+            if season is None and numbers[0] <= 0:
+                continue
+            if functional_lists.episode_key(*numbers) in skip:
+                continue
+            episodes.append((numbers, functional_lists.episode_item(row, item)))
+        episodes.sort(key=lambda entry: entry[0])
+        return [ep for _, ep in episodes]
+
+    def _flat_items(self, items):
+        """
+        <summary>
+        A list's items with every whole show or season row replaced by its episodes.
+        </summary>
+        <param name="items">The list's items as the skin has them.</param>
+        <returns>A new list of playable items, in list order and episode order.</returns>
+        """
+        flat = []
+        for item in items:
+            if functional_lists.is_group(item):
+                flat.extend(self._group_episodes(item))
+            else:
+                flat.append(item)
+        return flat
+
+    def _list_row_labels(self, slot):
+        """
+        <summary>
+        What the Coming up rows say for the next showings of a list slot, first to last.
+        </summary>
+        <param name="slot">A list slot whose list_items _reload_slots has filled.</param>
+        <returns>Up to NEXT_LIST_COUNT labels. A random slot gives its list's name for
+        every showing, because what it plays is drawn when the banner comes up. The in
+        order unwatched mode gives the unwatched items in list order, so the second
+        showing names the item after the first; once those run out the list is all
+        watched and nothing more is given. The in turn mode walks on from the item
+        played last, wrapping round.</returns>
+        <remarks>
+        Cached per slot, signed like _next_item_cached and cleared with it, because
+        the unwatched mode asks the library about every item. A lookup failure is
+        logged and cached as no labels, so the rows fall back to the slot's label.
+        </remarks>
+        """
+        signature = self._slot_signature(slot)
+        cached = self._next_rows_cache.get(slot.id)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        labels = []
+        try:
+            if slot.list_mode in functional_lists.RANDOM_MODES:
+                labels = [slot.list_title] * NEXT_LIST_COUNT
+            else:
+                items = self._flat_items(slot.list_items)
+                if items and slot.list_mode == functional_lists.MODE_TURN:
+                    from resources.lib import slots as slot_store
+                    start = functional_lists.turn_index(items, slot_store.get_list_progress(slot.id))
+                    labels = [functional_lists.item_label(items[(start + n) % len(items)])
+                              for n in range(NEXT_LIST_COUNT)]
+                elif items:
+                    for item in items:
+                        if len(labels) == NEXT_LIST_COUNT:
+                            break
+                        if not self._list_item_watched(item):
+                            labels.append(functional_lists.item_label(item))
+        except Exception as e:
+            self._log('Slot {}: Coming up rows for the skin failed: {}'.format(
+                slot.index + 1, e), xbmc.LOGWARNING)
+            labels = []
+        self._next_rows_cache[slot.id] = (signature, labels)
+        return labels
+
+    def _row_label(self, slot, nth):
+        """
+        <summary>
+        The label of one numbered Coming up row.
+        </summary>
+        <param name="slot">The slot due in that row.</param>
+        <param name="nth">How many earlier rows the same slot already has, 0 for its
+        first.</param>
+        <returns>The slot's label, or for a list slot the entry from _list_row_labels,
+        falling back to the slot's label when there is none.</returns>
+        """
+        if slot.kind != 'list':
+            return slot.label
+        labels = self._list_row_labels(slot)
+        return labels[nth] if nth < len(labels) else slot.label
 
     def _list_series(self, items, how):
         """
@@ -970,6 +1136,7 @@ class EngageScheduler:
                     # The published line names the item just played until the
                     # cache is dropped; the next tick then shows the one after.
                     self._next_item_cache.pop(slot.id, None)
+                    self._next_rows_cache.pop(slot.id, None)
                 if item.get('series'):
                     from resources.lib import slots as slot_store
                     group, identity, position = item['series']
@@ -1314,7 +1481,8 @@ class EngageScheduler:
         something the library can answer for.</returns>
         <remarks>
         A sequence is checked item by item in list order, and so is a Functional list,
-        counting only its library movies and episodes. A TV show favourite looks at
+        counting only its library movies and episodes, a whole show or season row
+        through its episodes. A TV show favourite looks at
         every episode of the show, because the episode watched early is not the one the
         banner would offer next. A movie favourite stored as a videodb path is looked up
         by id. A favourite that is a folder, playlist, plugin or plain file path is not
@@ -1324,7 +1492,7 @@ class EngageScheduler:
         if slot.kind == 'sequence':
             return self._last_played_in_items(slot.items, since)
         if slot.kind == 'list':
-            refs = [functional_lists.library_ref(it) for it in slot.list_items]
+            refs = [functional_lists.library_ref(it) for it in self._flat_items(slot.list_items)]
             return self._last_played_in_items([r for r in refs if r], since)
         favs = self._get_favourites_raw()
         fav = next((f for f in favs if f.get('title', '').lower() == slot.favourite.lower()), None)
@@ -1494,6 +1662,22 @@ class EngageScheduler:
             thumb = self._episode_art(episode) if episode else self._favourite_thumb(slot.favourite)
         return episode_label, thumb
 
+    def _slot_signature(self, slot):
+        """
+        <summary>
+        What a slot points at, for telling a cached description from a stale one.
+        </summary>
+        <param name="slot">The slot.</param>
+        <returns>A hashable tuple of its kind, favourite, sequence type and item ids,
+        and for a list slot its name, mode and the identity and skip list of every
+        item in the list.</returns>
+        """
+        return (slot.kind, slot.favourite, slot.seq_type,
+                tuple(entry.get('id') for entry in slot.items),
+                slot.list_name, slot.list_mode,
+                tuple((functional_lists.item_identity(it), tuple(it.get('skip') or ()))
+                      for it in slot.list_items))
+
     def _next_item_cached(self, slot):
         """
         <summary>
@@ -1510,10 +1694,7 @@ class EngageScheduler:
         library change or slot save clears it. The banner never uses this cache.
         </remarks>
         """
-        signature = (slot.kind, slot.favourite, slot.seq_type,
-                     tuple(entry.get('id') for entry in slot.items),
-                     slot.list_name, slot.list_mode,
-                     tuple(functional_lists.item_identity(it) for it in slot.list_items))
+        signature = self._slot_signature(slot)
         cached = self._next_item_cache.get(slot.id)
         if cached is not None and cached[0] == signature:
             return cached[1], cached[2]
@@ -1636,8 +1817,10 @@ class EngageScheduler:
         when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
         Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
         numbered rows, each with its own Label and When and no episode line, so a
-        skin's list shows titles only and the rows need no library lookup; a number
-        with no occurrence is cleared. Each property is written only
+        skin's list shows titles only; a number with no occurrence is cleared. A row's
+        Label is the slot's label, except for a Functional list slot, where it is the
+        list's name for a random slot and the item due to play for an in order one
+        (see _row_label), so only list slots ask the library for the rows. Each property is written only
         when its value differs from what the window already holds, see
         _write_next_properties. Any failure is logged and swallowed: the skin block is
         a convenience and must never cost a prompt.
@@ -1672,8 +1855,11 @@ class EngageScheduler:
                     'State': self._next_state(slot, due, key, now),
                     'Count': str(len(slots)),
                 }
+                shown = {}
                 for number, (row_due, _, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
-                    values['{}.Label'.format(number)] = row_slot.label
+                    nth = shown.get(row_slot.id, 0)
+                    shown[row_slot.id] = nth + 1
+                    values['{}.Label'.format(number)] = self._row_label(row_slot, nth)
                     values['{}.When'.format(number)] = when_label(row_due, now)
                 self._write_next_properties(values, reason)
             except Exception:
@@ -1762,13 +1948,16 @@ class EngageScheduler:
         """
         if sender == ADDON_ID and method == 'Other.' + SLOTS_SAVED_MESSAGE:
             self._next_item_cache.clear()
+            self._next_rows_cache.clear()
             self._publish_async('slots saved')
             return
         if method in ('VideoLibrary.OnScanFinished', 'VideoLibrary.OnCleanFinished'):
             self._next_item_cache.clear()
+            self._next_rows_cache.clear()
             self._publish_async(method)
         elif method in ('VideoLibrary.OnUpdate', 'VideoLibrary.OnRemove'):
             self._next_item_cache.clear()
+            self._next_rows_cache.clear()
             if method == 'VideoLibrary.OnUpdate' and '"playcount"' in (data or ''):
                 self._publish_async('watched state changed')
 
