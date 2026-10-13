@@ -29,10 +29,11 @@ Favourites and library.
 ## Features
 
 - 🗓️ **Unlimited watch slots**, schedule any favourite (TV show, movie, folder,
-  playlist) at a time that repeats weekly on chosen day(s), monthly on a day of
-  the month, yearly on a date, or just once on a one-off date. A monthly slot on
-  the 29th to 31st runs on the last day of a shorter month, and a yearly 29th
-  February runs on the 28th outside leap years.
+  playlist) at a time that repeats weekly on chosen day(s), every 2, 3 or 4
+  weeks on chosen day(s) (every other Tuesday, say, starting this week or next),
+  monthly on a day of the month, yearly on a date, or just once on a one-off
+  date. A monthly slot on the 29th to 31st runs on the last day of a shorter
+  month, and a yearly 29th February runs on the 28th outside leap years.
 - 📅 **Multiple days per slot**, pick any combination of weekdays (great for a
   show that's stripped daily, e.g. the Simpsons every weekday at 6).
 - 🎞️ **Movie sequences**, build an ordered list of films (e.g. all the Marvel
