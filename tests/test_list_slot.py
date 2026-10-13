@@ -4,7 +4,8 @@
 Unit test for slots that play from a Functional skin list and for the
 monthly and yearly repeats: reading the skin's lists.json, which item each of
 the four list modes plays (in order or random, unwatched or any), that a
-random pick holds for its occurrence, that the in turn mode keeps its place,
+random pick holds for its occurrence, that the optional sequels in order switch
+keeps a movie set from jumping ahead, that the in turn mode keeps its place,
 what the skin is shown, the recent watch lookup, and which days a weekly,
 monthly, yearly or one-shot slot runs on.
 </summary>
@@ -176,15 +177,18 @@ def write_lists(lists):
         json.dump({'version': 1, 'last': '', 'lists': lists}, f)
 
 
-def movie(movieid, playcount=0, lastplayed=''):
-    """<summary>Put a movie in the fake library.</summary>"""
+def movie(movieid, playcount=0, lastplayed='', setid=0, premiered=''):
+    """<summary>Put a movie in the fake library, optionally in a movie set.</summary>"""
     LIBRARY[('VideoLibrary.GetMovieDetails', movieid)] = {
-        'movieid': movieid, 'playcount': playcount, 'lastplayed': lastplayed}
+        'movieid': movieid, 'playcount': playcount, 'lastplayed': lastplayed,
+        'setid': setid, 'premiered': premiered, 'year': int(premiered[:4] or 0)}
 
 
-def save_list_slot(name, mode, slot_id=1):
+def save_list_slot(name, mode, slot_id=1, sequels=None):
     """<summary>Store one enabled list slot and return its dict.</summary>"""
     data = store.new_list_slot(name, mode)
+    if sequels:
+        data['list_sequels'] = sequels
     data['id'] = slot_id
     store.save_slots([data])
     return data
@@ -369,6 +373,83 @@ def test_turn_mode():
     check(7 not in sched._next_item_cache, 'playing drops the published line so the next one shows')
 
 
+def test_series_pool():
+    """<summary>The pure narrowing: earliest unwatched per series, or the walk from progress.</summary>"""
+    a, b, c, d = item('A', dbid=1), item('B', dbid=2), item('C', dbid=3), item('D', dbid=4)
+    items = [a, b, c, d]
+    series = {0: ('set:1', (0,)), 1: ('set:1', (1,)), 2: ('set:1', (2,))}
+    equal(functional_lists.series_pool(items, [0, 1, 2, 3], series), [0, 3],
+          'only the first of the series and the standalone film')
+    equal(functional_lists.series_pool(items, [1, 2, 3], series), [1, 3],
+          'first watched: the second is next')
+    dated = {0: ('set:1', ('2004', 0)), 1: ('set:1', ('2001', 1)), 2: ('set:1', ('2002', 2))}
+    equal(functional_lists.series_pool(items, [0, 1, 2, 3], dated), [1, 3], 'by date the 2001 film leads')
+    walk = functional_lists.series_pool
+    equal(walk(items, [0, 1, 2, 3], series, {}), [0, 3], 'no progress: walk starts at the first')
+    equal(walk(items, [0, 1, 2, 3], series, {'set:1': {'identity': list(functional_lists.item_identity(b)),
+                                                       'index': 1}}), [2, 3], 'after B comes C')
+    equal(walk(items, [0, 1, 2, 3], series, {'set:1': {'identity': list(functional_lists.item_identity(c)),
+                                                       'index': 2}}), [0, 3], 'wraps after the last')
+    equal(functional_lists.series_position(items, series, 2), ('set:1', ('movie', 3), 2), 'position of C')
+    equal(functional_lists.series_position(items, series, 3), None, 'standalone has no position')
+    equal(functional_lists.sequels_of({}), 'off', 'the option is off unless chosen')
+    equal(functional_lists.mode_text({'list_mode': 'random', 'list_sequels': 'list'}),
+          'random, unwatched, sequels in list order', 'menus name the option when on')
+    equal(functional_lists.mode_text({'list_mode': 'next', 'list_sequels': 'list'}), 'in order, unwatched',
+          'and not for an in order slot')
+
+
+def test_random_sequels():
+    """<summary>Unwatched random with sequels in order never jumps ahead in a movie set.</summary>"""
+    LIBRARY.clear()
+    movie(1, setid=5, premiered='2001-11-16')
+    movie(2, setid=5, premiered='2002-11-15')
+    movie(3, setid=5, premiered='2004-05-31')
+    movie(4)
+    # Listed out of release order on purpose: list order and date order differ.
+    write_lists([{'name': 'Films', 'items': [item('Azkaban', dbid=3), item('Stone', dbid=1),
+                                             item('Chamber', dbid=2), item('Solo', dbid=4)]}])
+    save_list_slot('Films', 'random', sequels='date')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    seen = {sched._describe_slot(slot, '2026-10-17-1-{:04d}'.format(n))[0] for n in range(40)}
+    equal(seen, {'Stone', 'Solo'}, 'by date only the first film of the set is in the draw')
+    movie(1, playcount=1, setid=5, premiered='2001-11-16')
+    seen = {sched._describe_slot(slot, '2026-10-18-1-{:04d}'.format(n))[0] for n in range(40)}
+    equal(seen, {'Chamber', 'Solo'}, 'once it is watched the next film takes its place')
+    save_list_slot('Films', 'random', sequels='list')
+    slot = sched._reload_slots()[0]
+    LIBRARY.clear()
+    movie(1, setid=5, premiered='2001-11-16')
+    movie(2, setid=5, premiered='2002-11-15')
+    movie(3, setid=5, premiered='2004-05-31')
+    movie(4)
+    seen = {sched._describe_slot(slot, '2026-10-19-1-{:04d}'.format(n))[0] for n in range(40)}
+    equal(seen, {'Azkaban', 'Solo'}, 'by list order the first listed leads, whatever its date')
+    save_list_slot('Films', 'random', sequels='off')
+    slot = sched._reload_slots()[0]
+    seen = {sched._describe_slot(slot, '2026-10-20-1-{:04d}'.format(n))[0] for n in range(60)}
+    equal(seen, {'Azkaban', 'Stone', 'Chamber', 'Solo'}, 'with the option off every film can come up')
+
+
+def test_random_any_sequels():
+    """<summary>Random any with sequels in order walks the set film by film and wraps.</summary>"""
+    LIBRARY.clear()
+    movie(1, playcount=1, setid=5, premiered='2001-11-16')
+    movie(2, playcount=1, setid=5, premiered='2002-11-15')
+    write_lists([{'name': 'Films', 'items': [item('Stone', dbid=1), item('Chamber', dbid=2)]}])
+    save_list_slot('Films', 'random_any', slot_id=9, sequels='list')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    del PLAYED[:]
+    for n in range(3):
+        sched._play_slot(slot, '2026-10-21-9-{:04d}'.format(n))
+    equal(PLAYED, [{'movieid': 1}, {'movieid': 2}, {'movieid': 1}], 'one film after another, wrapping')
+    equal(store.get_series_progress(9)['set:5']['index'], 0, 'the series place is stored')
+    store.set_list_progress(9, ('movie', 1), 0)
+    check('set:5' in store.get_series_progress(9), 'an in turn write keeps the series places')
+
+
 def test_recent_watch():
     """<summary>The recent watch check sees a list's library films and ignores the rest.</summary>"""
     LIBRARY.clear()
@@ -448,7 +529,8 @@ def test_monthly_occurrences():
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
-                 test_random_any_mode, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_repeats, test_monthly_occurrences):
+                 test_random_any_mode, test_series_pool, test_random_sequels,
+                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_repeats, test_monthly_occurrences):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:

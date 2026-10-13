@@ -304,6 +304,64 @@ def set_list_progress(slot_id, identity, index):
         _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
 
 
+def get_series_progress(slot_id):
+    """
+    <summary>
+    What each series in a random list slot played last, when the slot keeps sequels
+    in order.
+    </summary>
+    <param name="slot_id">The slot's id.</param>
+    <returns>{group: {'identity': [...], 'index': n}}, empty when nothing has played
+    yet or the file cannot be read.</returns>
+    <remarks>
+    Kept in list_progress.json under a 'series' key beside the in turn entries, which
+    are keyed by slot id and so can never collide with it.
+    </remarks>
+    """
+    try:
+        with open(_list_progress_path(), 'r', encoding='utf-8') as f:
+            entry = (json.load(f).get('series') or {}).get(str(slot_id))
+        return entry if isinstance(entry, dict) else {}
+    except (OSError, IOError, ValueError, AttributeError):
+        return {}
+
+
+def set_series_progress(slot_id, group, identity, index):
+    """
+    <summary>
+    Record the item one series in a random list slot has just played.
+    </summary>
+    <param name="slot_id">The slot's id.</param>
+    <param name="group">The series, as functional_lists.series_position names it.</param>
+    <param name="identity">functional_lists.item_identity of the item played.</param>
+    <param name="index">Its position in the series at the time.</param>
+    <remarks>
+    Written through a .tmp file and a rename. A failed write is logged and
+    swallowed: the worst case is the same film of that series coming up again.
+    </remarks>
+    """
+    path = _list_progress_path()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, IOError, ValueError):
+        data = {}
+    series = data.get('series') if isinstance(data.get('series'), dict) else {}
+    entry = series.get(str(slot_id)) if isinstance(series.get(str(slot_id)), dict) else {}
+    entry[group] = {'identity': list(identity), 'index': int(index)}
+    series[str(slot_id)] = entry
+    data['series'] = series
+    try:
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except (OSError, IOError) as e:
+        _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
+
+
 def new_slot(favourite='', day='Monday'):
     """
     <summary>
