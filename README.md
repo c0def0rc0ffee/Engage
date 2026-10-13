@@ -49,7 +49,12 @@ Favourites and library.
   a random unwatched list is watched it picks from the whole list again. A plain
   file or plugin item in a list has no watched count Engage can read, so the
   unwatched modes always treat it as unwatched; turn on the list's Remove
-  Watched switch in the skin to have such items drop off once seen.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
+  Watched switch in the skin to have such items drop off once seen. A random
+  slot can optionally keep sequels in order: films in the same Kodi movie set,
+  and episodes of the same show, then only come up in turn, so Prisoner of
+  Azkaban never plays before Chamber of Secrets. The order follows either where
+  they sit in the list (reorder the list in the skin to fix an exception) or
+  release date. A film Kodi has not put in a set counts as standalone.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
   *unwatched* episode (and skips season-0 specials until the main run is done).
   Plays it as a proper library/plugin item, so metadata and watched-tracking
   just work.

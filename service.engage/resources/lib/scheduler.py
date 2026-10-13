@@ -240,6 +240,7 @@ class Slot:
         # from slots.json, so it is always the list as the skin has it now.
         self.list_name = data.get('list_name') or ''
         self.list_mode = functional_lists.mode_of(data)
+        self.list_sequels = functional_lists.sequels_of(data)
         self.list_items = []
 
     def day_indexes(self):
@@ -829,6 +830,10 @@ class EngageScheduler:
         there would be forgotten on a restart; the describer shows 'Random pick' instead.
         The in turn mode needs no key: its place only moves when _play_slot records a
         play, so the banner and the playback name the same item anyway.
+        With the slot's sequels option on, either random draw offers only the next
+        item of each series (see _list_series and functional_lists.series_pool), and
+        the choice carries a 'series' entry so _play_slot can record that series'
+        place.
         </remarks>
         """
         items = slot.list_items
@@ -838,10 +843,21 @@ class EngageScheduler:
             if key in self._list_picks:
                 return self._list_picks[key]
             pool = list(range(len(items)))
+            unwatched = []
             if slot.list_mode == functional_lists.MODE_RANDOM:
-                pool = [i for i in pool if not self._list_item_watched(items[i])] or pool
+                unwatched = [i for i in pool if not self._list_item_watched(items[i])]
+                pool = unwatched or pool
+            series = {}
+            if slot.list_sequels != functional_lists.SEQUELS_OFF:
+                from resources.lib import slots as slot_store
+                series = self._list_series(items, slot.list_sequels)
+                # The unwatched draw takes each series' earliest unwatched film;
+                # a draw over everything walks each series from where it got to.
+                progress = None if unwatched else slot_store.get_series_progress(slot.id)
+                pool = functional_lists.series_pool(items, pool, series, progress) or pool
             index = random.choice(pool)
             choice = self._list_choice(items[index], index)
+            choice['series'] = functional_lists.series_position(items, series, index)
             self._list_picks[key] = choice
             return choice
         if slot.list_mode == functional_lists.MODE_TURN:
@@ -852,6 +868,53 @@ class EngageScheduler:
             if not self._list_item_watched(item):
                 return self._list_choice(item, index)
         return None
+
+    def _list_series(self, items, how):
+        """
+        <summary>
+        Which list items belong to a series, and their order within it.
+        </summary>
+        <param name="items">The list's items.</param>
+        <param name="how">functional_lists.SEQUELS_LIST to order by list position, or
+        SEQUELS_DATE to order films by release date and episodes by season and
+        episode.</param>
+        <returns>{index: (group, rank)} for every item in a series; standalone items
+        are left out. Group is 'set:&lt;setid&gt;' for a film in a Kodi movie set and
+        'show:&lt;name&gt;' for an episode.</returns>
+        <remarks>
+        Films are asked of the library for their set, so a film missing from its set
+        in Kodi is standalone here and can come up at any time; that is logged through
+        _debug rather than guessed from titles. Plain files and anything else
+        are always standalone. A film with no release date sorts after the dated ones
+        of its set, and an episode without numbers after the numbered ones. A single
+        item of a series is still recorded; it has nothing to hold back.
+        </remarks>
+        """
+        series = {}
+        by_date = how == functional_lists.SEQUELS_DATE
+        for index, item in enumerate(items):
+            spec = functional_lists.play_spec(item) or {}
+            if 'movieid' in spec:
+                data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                    'jsonrpc': '2.0', 'method': 'VideoLibrary.GetMovieDetails',
+                    'params': {'movieid': spec['movieid'],
+                               'properties': ['setid', 'premiered', 'year']}, 'id': 1
+                })))
+                details = data.get('result', {}).get('moviedetails') or {}
+                setid = int(details.get('setid') or 0)
+                if not setid:
+                    self._debug('List item "{}" is in no movie set'.format(item.get('label')))
+                    continue
+                when = details.get('premiered') or str(details.get('year') or '') or '~'
+                series[index] = ('set:{}'.format(setid), ((when,) if by_date else ()) + (index,))
+            elif item.get('dbtype') == 'episode' and item.get('show'):
+                try:
+                    numbers = (int(item.get('season')), int(item.get('episode')))
+                except (ValueError, TypeError):
+                    numbers = (10 ** 6, 10 ** 6)
+                series[index] = ('show:{}'.format(str(item['show']).lower()),
+                                 (numbers if by_date else ()) + (index,))
+        return series
 
     def _list_choice(self, item, index):
         """
@@ -907,6 +970,10 @@ class EngageScheduler:
                     # The published line names the item just played until the
                     # cache is dropped; the next tick then shows the one after.
                     self._next_item_cache.pop(slot.id, None)
+                if item.get('series'):
+                    from resources.lib import slots as slot_store
+                    group, identity, position = item['series']
+                    slot_store.set_series_progress(slot.id, group, identity, position)
             else:
                 self._log('Slot {}: list all watched'.format(slot.index + 1))
                 xbmcgui.Dialog().notification(

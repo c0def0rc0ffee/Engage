@@ -139,7 +139,7 @@ def _slot_line(slot):
     if slot.get('kind') == 'list':
         name = '{} [list, {}]'.format(
             slot.get('label') or slot.get('list_name') or '(no list)',
-            functional_lists.MODE_SHORT[functional_lists.mode_of(slot)])
+            functional_lists.mode_text(slot))
     elif slot.get('kind') == 'sequence':
         count = len(store.items_of(slot))
         noun = 'episodes' if slot.get('seq_type') == 'binge' else 'films'
@@ -633,11 +633,27 @@ def _pick_list_mode(current):
     return functional_lists.MODES[idx] if idx >= 0 else None
 
 
+def _pick_list_sequels(current):
+    """
+    <summary>
+    Ask whether a random list slot keeps each film series (a Kodi movie set, or one
+    show's episodes) in order.
+    </summary>
+    <param name="current">The choice to preselect, one of functional_lists.SEQUELS.</param>
+    <returns>One of functional_lists.SEQUELS, or None when the user backed out.</returns>
+    """
+    choices = functional_lists.SEQUELS
+    labels = [functional_lists.SEQUEL_LABELS[c] for c in choices]
+    pre = choices.index(current) if current in choices else 0
+    idx = xbmcgui.Dialog().select('Sequels in order?', labels, preselect=pre)
+    return choices[idx] if idx >= 0 else None
+
+
 def _add_list_slot():
     """
     <summary>
-    Guided add for a Functional list slot: list, then in order or random, then the
-    repeat and the time.
+    Guided add for a Functional list slot: list, then in order or random, then for a
+    random slot whether sequels keep their order, then the repeat and the time.
     </summary>
     <remarks>
     The label is left empty so the slot shows the list's own name. Backing out at any
@@ -651,6 +667,11 @@ def _add_list_slot():
     if mode is None:
         return
     slot = store.new_list_slot(name, mode)
+    if mode in functional_lists.RANDOM_MODES:
+        sequels = _pick_list_sequels(functional_lists.SEQUELS_OFF)
+        if sequels is None:
+            return
+        slot['list_sequels'] = sequels
     schedule = _pick_schedule(slot)
     if not schedule:
         return
@@ -665,7 +686,7 @@ def _add_list_slot():
     store.save_slots(slots)
     _log('added list slot id={} list="{}" mode={}'.format(slot['id'], name, mode))
     _notify('Added: {} ({}), {} {:02d}:{:02d}'.format(
-        name, functional_lists.MODE_SHORT[mode], _schedule_text(slot), t[0], t[1]))
+        name, functional_lists.mode_text(slot), _schedule_text(slot), t[0], t[1]))
 
 
 def _edit_list_choice(s):
@@ -673,11 +694,18 @@ def _edit_list_choice(s):
     <summary>
     Change which Functional list a slot plays from, or how it picks from it.
     </summary>
+    <remarks>
+    The sequels line is offered only for the random modes, the only ones it affects.
+    A sequels choice left on a slot switched to an in order mode is kept but ignored.
+    </remarks>
     <param name="s">The slot dict, changed in place; the caller saves it.</param>
     """
     mode = functional_lists.mode_of(s)
     options = ['List: {}'.format(s.get('list_name') or '(not set)'),
                'Play: {}'.format(functional_lists.MODE_LABELS[mode])]
+    sequels = functional_lists.sequels_of(s)
+    if mode in functional_lists.RANDOM_MODES:
+        options.append('Sequels: {}'.format(functional_lists.SEQUEL_LABELS[sequels]))
     idx = xbmcgui.Dialog().select('Functional list', options)
     if idx == 0:
         name = _pick_list(s.get('list_name') or '')
@@ -687,6 +715,10 @@ def _edit_list_choice(s):
         new_mode = _pick_list_mode(mode)
         if new_mode:
             s['list_mode'] = new_mode
+    elif idx == 2:
+        new_sequels = _pick_list_sequels(sequels)
+        if new_sequels:
+            s['list_sequels'] = new_sequels
 
 
 def _edit_slot(slot_id):
@@ -708,7 +740,7 @@ def _edit_slot(slot_id):
         if is_list:
             second = 'Functional list: {}, {}...'.format(
                 s.get('list_name') or '(not set)',
-                functional_lists.MODE_SHORT[functional_lists.mode_of(s)])
+                functional_lists.mode_text(s))
             label_line = 'Label: {}'.format(s.get('label') or '(auto, uses list name)')
         elif is_seq:
             cur_items = store.items_of(s)

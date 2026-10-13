@@ -59,6 +59,28 @@ MODE_SHORT = {
     MODE_RANDOM_ANY: 'random, any',
 }
 
+# Whether a random list slot keeps a series in order, an option that is off
+# unless chosen. A series is the films of one Kodi movie set, or the episodes of
+# one show, that are in the list. With it on, only the next film of a series is
+# in the draw, so a sequel never plays before the film it follows. 'list'
+# orders a series by where its items sit in the list, so an exception is fixed
+# by reordering the list in the skin; 'date' orders films by release date and
+# episodes by season and episode.
+SEQUELS_OFF = 'off'
+SEQUELS_LIST = 'list'
+SEQUELS_DATE = 'date'
+SEQUELS = [SEQUELS_OFF, SEQUELS_LIST, SEQUELS_DATE]
+SEQUEL_LABELS = {
+    SEQUELS_OFF: 'Off, any film of a series can come up',
+    SEQUELS_LIST: 'In order, as the series sits in the list',
+    SEQUELS_DATE: 'In order, by release date',
+}
+SEQUEL_SHORT = {
+    SEQUELS_OFF: 'sequels any order',
+    SEQUELS_LIST: 'sequels in list order',
+    SEQUELS_DATE: 'sequels by release date',
+}
+
 
 def _log(msg, level=xbmc.LOGINFO):
     """
@@ -81,6 +103,35 @@ def mode_of(slot):
     """
     mode = (slot.get('list_mode') or '').strip()
     return mode if mode in MODES else DEFAULT_MODE
+
+
+def sequels_of(slot):
+    """
+    <summary>
+    Whether a list slot keeps series in order, one of SEQUELS.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>One of SEQUELS; an unknown or missing value gives SEQUELS_OFF, so
+    slots saved before the option existed behave as they always did.</returns>
+    """
+    how = (slot.get('list_sequels') or '').strip()
+    return how if how in SEQUELS else SEQUELS_OFF
+
+
+def mode_text(slot):
+    """
+    <summary>
+    The short description of how a list slot picks, for the slot list and menus.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>MODE_SHORT for its mode, with the sequels choice appended when it is a
+    random slot that keeps sequels in order, e.g. 'random, unwatched, sequels in
+    list order'.</returns>
+    """
+    mode, how = mode_of(slot), sequels_of(slot)
+    if mode in RANDOM_MODES and how != SEQUELS_OFF:
+        return '{}, {}'.format(MODE_SHORT[mode], SEQUEL_SHORT[how])
+    return MODE_SHORT[mode]
 
 
 def lists_path():
@@ -269,3 +320,68 @@ def turn_index(items, progress):
         return int(progress.get('index', 0)) % len(items)
     except (ValueError, TypeError):
         return 0
+
+
+def _series_orders(series):
+    """
+    <summary>
+    Each series' list indexes, first to last.
+    </summary>
+    <param name="series">{index: (group, rank)} as series_pool takes it.</param>
+    <returns>{group: [index, ...]} sorted by rank, then by list position.</returns>
+    """
+    groups = {}
+    for index, (group, rank) in series.items():
+        groups.setdefault(group, []).append((rank, index))
+    return {group: [index for _, index in sorted(members)] for group, members in groups.items()}
+
+
+def series_pool(items, pool, series, progress=None):
+    """
+    <summary>
+    Narrow a random draw so each series offers only its next item.
+    </summary>
+    <param name="items">The list's items as the skin has them now.</param>
+    <param name="pool">The indexes the draw would otherwise pick from.</param>
+    <param name="series">{index: (group, rank)} for every item that belongs to a
+    series; items not in it are standalone and are never held back.</param>
+    <param name="progress">None to take the earliest item of each series still in
+    the pool, which is what the unwatched mode wants. Otherwise {group: {'identity',
+    'index'}} from slots.get_series_progress: each series then offers the item after
+    the one it played last, wrapping after the last, which is what a draw that
+    ignores watched state needs.</param>
+    <returns>The pool with every later item of a series removed, in pool order. It
+    can be empty only when the pool held nothing but series items that were held
+    back; the caller then keeps the unnarrowed pool.</returns>
+    <remarks>
+    The walk through a series reuses turn_index, so a reordered or shortened series
+    keeps its place the same way an in turn slot does.
+    </remarks>
+    """
+    allowed = set(pool)
+    held_back = set()
+    for group, order in _series_orders(series).items():
+        if progress is None:
+            keep = [i for i in order if i in allowed][:1]
+        else:
+            keep = [order[turn_index([items[i] for i in order], progress.get(group))]]
+        held_back.update(i for i in order if i not in keep)
+    return [i for i in pool if i not in held_back]
+
+
+def series_position(items, series, index):
+    """
+    <summary>
+    Where one item sits in its series, for recording what a series played last.
+    </summary>
+    <param name="items">The list's items.</param>
+    <param name="series">{index: (group, rank)} as series_pool takes it.</param>
+    <param name="index">The list index of the item chosen.</param>
+    <returns>(group, identity, position in the series), or None when the item is
+    standalone.</returns>
+    """
+    if index not in series:
+        return None
+    group = series[index][0]
+    order = _series_orders(series)[group]
+    return group, item_identity(items[index]), order.index(index)
