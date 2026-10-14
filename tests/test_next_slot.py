@@ -210,6 +210,7 @@ def test_when_label():
     equal(scheduler.when_label(at(6), now), 'Saturday 19:00', 'six days ahead, still bare weekday')
     equal(scheduler.when_label(at(7), now), 'Sunday 18/10/2026 19:00', 'seven days ahead, dated en-GB')
     equal(scheduler.when_label(datetime(2027, 1, 3, 20, 30), now), 'Sunday 03/01/2027 20:30', 'far ahead, dated')
+    equal(scheduler.when_label(at(-1, 22), now), 'Yesterday 22:00', 'an overdue occurrence from the day before')
 
 
 # --- occurrence_key -------------------------------------------------------------
@@ -255,7 +256,9 @@ def test_next_occurrence():
     due, _ = sched._next_occurrence(sunday_only, now.replace(hour=20))
     equal(due, datetime(2026, 10, 11, 19, 0), 'one hour overdue, inside catch-up, still today')
     due, _ = sched._next_occurrence(sunday_only, now.replace(hour=1) + timedelta(days=1))
-    equal(due, datetime(2026, 10, 18, 19, 0), 'six hours past, beyond catch-up, next week')
+    equal(due, datetime(2026, 10, 11, 19, 0), 'exactly six hours past, the window is inclusive, still yesterday')
+    due, _ = sched._next_occurrence(sunday_only, now.replace(hour=1, minute=1) + timedelta(days=1))
+    equal(due, datetime(2026, 10, 18, 19, 0), 'six hours and a minute past, beyond catch-up, next week')
     _Addon.settings['catchup_hours'] = 0
     due, _ = sched._next_occurrence(sunday_only, now.replace(hour=19, minute=1))
     equal(due, datetime(2026, 10, 11, 19, 0), 'catch-up off, one minute past, inside the grace')
@@ -275,6 +278,22 @@ def test_next_occurrence():
     bad_date = scheduler.Slot(make_slot(5, 'Bad date', ['Monday'], 20, date='not-a-date'))
     due, _ = sched._next_occurrence(bad_date, now)
     equal(due, datetime(2026, 10, 12, 20, 0), 'invalid date falls back to the weekly days')
+
+    # Yesterday's occurrence is still next after midnight while the catch-up
+    # window covers it, or while a snooze on it is running.
+    late = scheduler.Slot(make_slot(6, 'Late show', ['Saturday'], 22))
+    after_midnight = datetime(2026, 10, 11, 0, 30)  # Sunday, 2.5 hours after Saturday 22:00
+    due, key = sched._next_occurrence(late, after_midnight)
+    equal((due, key), (datetime(2026, 10, 10, 22, 0), '2026-10-10-6-2200'),
+          'yesterday\'s occurrence inside the catch-up window is next')
+    _Addon.settings['catchup_hours'] = 0
+    due, _ = sched._next_occurrence(late, after_midnight)
+    equal(due, datetime(2026, 10, 17, 22, 0), 'with the window off it has gone')
+    sched.snoozed['2026-10-10-6-2200'] = datetime(2026, 10, 11, 0, 45)
+    due, _ = sched._next_occurrence(late, after_midnight)
+    equal(due, datetime(2026, 10, 10, 22, 0), 'unless a snooze on it is still running')
+    sched.snoozed.clear()
+    _Addon.settings['catchup_hours'] = 6
 
 
 # --- _next_state ----------------------------------------------------------------

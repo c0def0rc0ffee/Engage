@@ -225,10 +225,10 @@ def _do_backup():
     try:
         count = store.write_backup(full)
         _notify('Backed up {} slot(s)'.format(count), duration=6000)
-        xbmcgui.Dialog().ok('Engage', 'Backup saved to:\n{}'.format(full))
+        xbmcgui.Dialog().ok('Engage', 'Backup saved to:[CR]{}'.format(full))
     except (OSError, IOError) as e:
         _log('backup failed: {}'.format(e), xbmc.LOGERROR)
-        xbmcgui.Dialog().ok('Engage', 'Backup failed:\n{}'.format(e))
+        xbmcgui.Dialog().ok('Engage', 'Backup failed:[CR]{}'.format(e))
 
 
 def _do_restore():
@@ -252,7 +252,7 @@ def _do_restore():
     if slots:
         if not xbmcgui.Dialog().yesno(
                 'Engage',
-                'Restoring will REPLACE your current {} slot(s).\nContinue?'.format(len(slots))):
+                'Restoring will REPLACE your current {} slot(s).[CR]Continue?'.format(len(slots))):
             return
 
     try:
@@ -261,7 +261,7 @@ def _do_restore():
         xbmcgui.Dialog().ok('Engage', 'Restored {} slot(s) from backup.'.format(count))
     except (ValueError, OSError, IOError) as e:
         _log('restore failed: {}'.format(e), xbmc.LOGERROR)
-        xbmcgui.Dialog().ok('Engage', 'Restore failed:\n{}'.format(e))
+        xbmcgui.Dialog().ok('Engage', 'Restore failed:[CR]{}'.format(e))
 
 
 def _add_slot():
@@ -390,7 +390,7 @@ def _item_entry_menu(items, i):
     Move up / move down / move to position / remove a single item.
     </summary>
     """
-    options = ['Move up', 'Move down', 'Move to position…', '[COLOR red]Remove[/COLOR]']
+    options = ['Move up', 'Move down', 'Move to position...', '[COLOR red]Remove[/COLOR]']
     choice = xbmcgui.Dialog().select(_item_line(items[i]), options)
     if choice == 0 and i > 0:
         items[i - 1], items[i] = items[i], items[i - 1]

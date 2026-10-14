@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # <summary>
-# Packaging build for the Engage Kodi add-on (service.engage). Builds two
+# Build script for the Engage Kodi add-on (service.engage). Builds two
 # versioned zips straight from the project root, plus the local run copy:
 #   Engage Dist/service.engage-<version>.zip  Kodi installable add-on zip.
 #       Kodi's "Install from zip file" needs the add-on folder at the zip
@@ -269,9 +269,13 @@ echo "Built: $git_zip ($(zip_size_kb "$git_zip") KB)"
 
 # 7) Post build verification. Do not trust the staging: read the archives
 #    back and refuse to keep a zip that carries a local only file, a secret
-#    looking name, version control or a backslash entry.
+#    looking name, version control or a backslash entry. The editor and
+#    tooling patterns are the ones read from .git/info/exclude above, matched
+#    against every path component of every entry, so that none of those names
+#    is spelt out in this script, which ships in the source zip.
 verify_zip() {
-    local archive="$1" listing
+    local archive="$1" listing entry part pat clean
+    local -a parts
     unzip -tq "$archive" >/dev/null || die "$archive fails unzip -t"
     listing="$(unzip -Z1 "$archive")"
     if grep -q '\\' <<< "$listing"; then
@@ -280,9 +284,22 @@ verify_zip() {
     if grep -Ei 'cred|secret|passw|token|htaccess|(^|/)\.env|(^|/)\.git/|node_modules|__pycache__|\.pyc$' <<< "$listing"; then
         die "$archive carries something that must never ship (listed above)"
     fi
-    if grep -E '^(publish-github\.sh|push-source\.sh|publish\.conf|\.publish-allow|Github repository|GITHUB-RELEASE-GUIDE\.md|build\.conf|release-mirror\.conf|PROJECT_NOTES\.md|Packaging\.md|deploy_to_programfiles\.ps1|deploy_log\.txt)$' <<< "$listing"; then
+    if grep -E '^(publish-github\.sh|push-source\.sh|publish\.conf|\.publish-allow|Github repository|GITHUB-RELEASE-GUIDE\.md|build\.conf|release-mirror\.conf|PROJECT_NOTES\.md|deploy_to_programfiles\.ps1|deploy_log\.txt)$' <<< "$listing"; then
         die "$archive carries a local only file (listed above)"
     fi
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        IFS='/' read -r -a parts <<< "$entry"
+        for part in "${parts[@]}"; do
+            for pat in "${local_patterns[@]}"; do
+                clean="${pat%/}"; clean="${clean#/}"
+                # shellcheck disable=SC2254
+                case "$part" in
+                    $clean) die "$archive carries a locally excluded entry ($entry): refusing to keep it" ;;
+                esac
+            done
+        done
+    done <<< "$listing"
     grep -q "^$addon_id/addon.xml$" <<< "$listing" || die "$archive has no $addon_id/addon.xml"
 }
 verify_zip "$dist_zip"

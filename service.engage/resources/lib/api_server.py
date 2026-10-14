@@ -32,6 +32,7 @@ import hmac
 import json
 import re
 import secrets
+import socket
 import threading
 import traceback
 from datetime import datetime
@@ -138,9 +139,14 @@ def start():
     <summary>
     Bind the server on a free loopback port, serve on a daemon thread and announce it.
     </summary>
+    <exception cref="Exception">Whatever the bind or the Home window write raised. On
+    an announcement failure the server is shut down and forgotten first, so the next
+    sync() tries again rather than finding a running server nobody was told about.</exception>
     <remarks>
     The announcement goes up only after the bind succeeds, so the property never names
-    a port nobody is listening on.
+    a port nobody is listening on. Before the shutdown on failure was added, a Home
+    window write that raised left the server serving unannounced for good, because
+    sync() saw _server set and returned.
     </remarks>
     """
     global _server
@@ -151,14 +157,21 @@ def start():
         server.daemon_threads = True
         server.api_token = secrets.token_urlsafe(32)
         threading.Thread(target=server.serve_forever, name='EngageApi', daemon=True).start()
-        _server = server
         port = server.server_address[1]
-        xbmcgui.Window(HOME_WINDOW_ID).setProperty(DISCOVERY_PROPERTY, json.dumps({
-            'api': API_VERSION,
-            'port': port,
-            'token': server.api_token,
-            'version': _addon_version(),
-        }))
+        try:
+            xbmcgui.Window(HOME_WINDOW_ID).setProperty(DISCOVERY_PROPERTY, json.dumps({
+                'api': API_VERSION,
+                'port': port,
+                'token': server.api_token,
+                'version': _addon_version(),
+            }))
+        except Exception:
+            _log('could not announce the server on port {}, shutting it down'.format(port),
+                 xbmc.LOGWARNING)
+            server.shutdown()
+            server.server_close()
+            raise
+        _server = server
         _log('listening on 127.0.0.1:{}'.format(port))
 
 
@@ -562,12 +575,20 @@ class _Handler(BaseHTTPRequestHandler):
     </summary>
     <remarks>
     Responses are HTTP/1.0, one request per connection, so a refused request never
-    leaves an unread body in a kept alive connection.
+    leaves an unread body in a kept alive connection. Every method the spec does not
+    offer (HEAD, OPTIONS, PATCH) still goes through _serve, so the Host and token
+    checks run first and the answer is the spec's JSON 405 with an Allow header, not
+    the HTML page http.server would send for a missing do_ method. The socket timeout
+    bounds how long a request that announces more body than it sends can hold a
+    handler thread.
     </remarks>
     """
 
     server_version = 'EngageApi'
     sys_version = ''
+    # Seconds the socket may sit idle in a read before the request is refused.
+    # JellyStat's proxy gives up after ten seconds too.
+    timeout = 10
 
     def log_message(self, fmt, *args):
         """
@@ -595,6 +616,18 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         """<summary>Serve a DELETE.</summary>"""
         self._serve('DELETE')
+
+    def do_HEAD(self):
+        """<summary>Serve a HEAD: the checks run, then handle() answers 405.</summary>"""
+        self._serve('HEAD')
+
+    def do_OPTIONS(self):
+        """<summary>Serve an OPTIONS: the checks run, then handle() answers 405.</summary>"""
+        self._serve('OPTIONS')
+
+    def do_PATCH(self):
+        """<summary>Serve a PATCH: the checks run, then handle() answers 405.</summary>"""
+        self._serve('PATCH')
 
     def _serve(self, method):
         """
@@ -628,9 +661,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(e.status, {'error': error}, e.headers)
         except Exception:
             _log('request failed:\n{}'.format(traceback.format_exc()), xbmc.LOGERROR)
-            self._send(500, {'error': {'code': 'internal',
-                                       'message': 'Engage hit an error; kodi.log has the detail.'}},
-                       {})
+            try:
+                self._send(500, {'error': {'code': 'internal',
+                                           'message': 'Engage hit an error; kodi.log has the detail.'}},
+                           {})
+            except OSError as e:
+                _log('could not send the error response: {}'.format(e), xbmc.LOGWARNING)
 
     def _read_body(self):
         """
@@ -639,16 +675,27 @@ class _Handler(BaseHTTPRequestHandler):
         </summary>
         <returns>The parsed value.</returns>
         <exception cref="ApiError">413 when Content-Length is over MAX_BODY, 400 when it
-        is missing, not a number, or the body is not JSON.</exception>
+        is missing, not a number, negative, when the body does not arrive within the
+        socket timeout, or when it is not JSON.</exception>
+        <remarks>
+        A negative Content-Length used to pass the size check and read to end of
+        stream, which held the handler thread until the client gave up.
+        </remarks>
         """
         try:
             length = int(self.headers.get('Content-Length') or '')
         except ValueError:
             raise ApiError(400, 'bad_request', 'The request needs a Content-Length.')
+        if length < 0:
+            raise ApiError(400, 'bad_request', 'Content-Length cannot be negative.')
         if length > MAX_BODY:
             raise ApiError(413, 'too_large', 'The request is larger than {} bytes.'.format(MAX_BODY))
         try:
-            return json.loads(self.rfile.read(length).decode('utf-8'))
+            raw = self.rfile.read(length)
+        except socket.timeout:
+            raise ApiError(400, 'bad_request', 'The request body did not arrive in time.')
+        try:
+            return json.loads(raw.decode('utf-8'))
         except (ValueError, UnicodeDecodeError):
             raise ApiError(400, 'bad_request', 'The request body is not JSON.')
 
@@ -660,6 +707,9 @@ class _Handler(BaseHTTPRequestHandler):
         <param name="status">The HTTP status.</param>
         <param name="payload">The value to send as JSON, or None for no body.</param>
         <param name="headers">Extra headers, such as ETag.</param>
+        <remarks>
+        A HEAD request gets the headers only, Content-Length included, as HTTP requires.
+        </remarks>
         """
         data = b'' if payload is None else json.dumps(payload).encode('utf-8')
         self.send_response(status)
@@ -670,5 +720,5 @@ class _Handler(BaseHTTPRequestHandler):
         for name, value in headers.items():
             self.send_header(name, value)
         self.end_headers()
-        if data:
+        if data and self.command != 'HEAD':
             self.wfile.write(data)

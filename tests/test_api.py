@@ -532,7 +532,12 @@ def request(port, method, path, token=None, host=None, body=None, headers=None):
 
 
 def test_server():
-    """<summary>Bind, discovery, Host and token checks, size limit, setting and stop.</summary>"""
+    """
+    <summary>
+    Bind, discovery, Host and token checks, size limit, the methods the spec does not
+    offer, a body that never arrives, setting and stop.
+    </summary>
+    """
     print('running test_server')
     store.save_slots([])
     _Window.props.clear()
@@ -540,6 +545,8 @@ def test_server():
     api_server.sync()
     check(api_server.DISCOVERY_PROPERTY not in _Window.props, 'setting off: nothing announced')
 
+    old_timeout = api_server._Handler.timeout
+    api_server._Handler.timeout = 1  # so the short body check below takes a second, not ten
     _Addon.settings['api_enabled'] = True
     api_server.sync()
     try:
@@ -580,9 +587,31 @@ def test_server():
         status, body, headers = request(port, 'DELETE', '/slots/1', token,
                                         headers={'If-Match': current_etag()})
         equal((status, body), (204, None), 'delete over HTTP')
+
+        # Methods the spec does not offer get the JSON 405, after the checks.
+        for method in ('PATCH', 'OPTIONS'):
+            status, body, headers = request(port, method, '/slots', token)
+            equal((status, body['error']['code']), (405, 'method_not_allowed'),
+                  '{} over HTTP is the spec\'s 405, not http.server\'s 501 page'.format(method))
+            equal(headers.get('Allow'), 'GET, POST', '{} carries Allow'.format(method))
+        status, body, headers = request(port, 'HEAD', '/info', token)
+        equal((status, body, headers.get('Allow')), (405, None, 'GET'), 'HEAD gets the 405 headers and no body')
+        status, body, _ = request(port, 'PATCH', '/slots')
+        equal((status, body['error']['code']), (401, 'unauthorised'), 'the token check runs before the 405')
+        status, body, _ = request(port, 'PATCH', '/slots', token, host='evil.example:{}'.format(port))
+        equal(status, 400, 'and so does the Host check')
+
+        status, body, _ = request(port, 'POST', '/slots', token, body=b'{}',
+                                  headers={'Content-Length': '-1'})
+        equal((status, body['error']['code']), (400, 'bad_request'), 'a negative Content-Length is refused')
+        status, body, _ = request(port, 'POST', '/slots', token, body=b'{}',
+                                  headers={'Content-Length': '5'})
+        equal((status, body['error']['code']), (400, 'bad_request'),
+              'a body shorter than its Content-Length is refused once the socket times out')
     finally:
         _Addon.settings['api_enabled'] = False
         api_server.sync()
+        api_server._Handler.timeout = old_timeout
     check(api_server.DISCOVERY_PROPERTY not in _Window.props, 'stop withdraws the announcement')
     try:
         request(port, 'GET', '/info', token)
@@ -590,6 +619,101 @@ def test_server():
     except OSError:
         pass
     _Addon.settings['api_enabled'] = True
+
+
+def test_start_announce_failure():
+    """<summary>A server that cannot be announced is shut down, so the next sync tries again.</summary>"""
+    print('running test_start_announce_failure')
+    _Window.props.clear()
+    real_set = _Window.setProperty
+
+    def refuse(self, key, value):
+        """<summary>A Home window write that fails, as it can during Kodi's start up.</summary>"""
+        raise RuntimeError('window not ready')
+
+    _Window.setProperty = refuse
+    try:
+        api_server.start()
+        check(False, 'start() swallowed the announcement failure')
+    except RuntimeError:
+        pass
+    finally:
+        _Window.setProperty = real_set
+    equal(api_server._server, None, 'no server is kept after a failed announcement')
+    check(api_server.DISCOVERY_PROPERTY not in _Window.props, 'nothing announced')
+    api_server.sync()
+    check(api_server.DISCOVERY_PROPERTY in _Window.props, 'the next sync starts and announces a server')
+    port = json.loads(_Window.props[api_server.DISCOVERY_PROPERTY])['port']
+    token = json.loads(_Window.props[api_server.DISCOVERY_PROPERTY])['token']
+    status, body, _ = request(port, 'GET', '/info', token)
+    equal(status, 200, 'and it answers')
+    api_server.stop()
+
+
+def test_store():
+    """
+    <summary>
+    The slot store: an unreadable slots.json is moved aside and never written over,
+    a blocked file refuses a save, and concurrent saves never leave a half written
+    file or a stray temporary file behind.
+    </summary>
+    """
+    print('running test_store')
+    import glob
+    import threading
+
+    folder = os.path.dirname(store._file_path())
+    for stale in glob.glob(os.path.join(folder, 'slots.json.broken-*')):
+        os.rename(stale, stale + '.old')
+    store.save_slots([from_api(fav(label='Keep me'))])
+    with open(store._file_path(), 'w', encoding='utf-8') as f:
+        f.write('{"version": 1, "slots": [{"id": 1, "label": "Keep m')
+    store._BROKEN_NOTIFIED.clear()
+    equal(store.load_slots(), [], 'an unreadable file reads as no slots')
+    aside = glob.glob(os.path.join(folder, 'slots.json.broken-*'))
+    aside = [p for p in aside if not p.endswith('.old')]
+    equal(len(aside), 1, 'the unreadable file was moved aside, not deleted')
+    with open(aside[0], encoding='utf-8') as f:
+        check(f.read().endswith('"Keep m'), 'the kept copy is byte for byte what was there')
+    check(not os.path.exists(store._file_path()), 'nothing is left at the real path to be written over')
+    check(store._file_path() in store._BROKEN_NOTIFIED, 'the user was told')
+    equal(store.load_slots(), [], 'a second read is simply a missing file')
+    store.save_slots([from_api(fav(label='New'))])
+    equal([s['label'] for s in store.load_slots()], ['New'], 'a later save starts a new file')
+    with open(aside[0], encoding='utf-8') as f:
+        check(f.read().endswith('"Keep m'), 'and the kept copy is untouched')
+
+    store._BLOCKED_PATHS.add(store._file_path())
+    try:
+        store.save_slots([])
+        check(False, 'a save to a blocked path was allowed')
+    except RuntimeError:
+        pass
+    finally:
+        store._BLOCKED_PATHS.discard(store._file_path())
+
+    big = [dict(from_api(fav(favourite='x' * 2000)), id=i) for i in range(1, 60)]
+    problems = []
+
+    def writer():
+        """<summary>Save the big list sixty times, reading the file back whole after each.</summary>"""
+        for _ in range(60):
+            try:
+                store.save_slots(big)
+                with open(store._file_path(), 'r', encoding='utf-8') as f:
+                    json.load(f)
+            except Exception as e:
+                problems.append(type(e).__name__)
+
+    threads = [threading.Thread(target=writer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    equal(problems, [], 'four writers at once: every save lands and every read is whole')
+    equal(glob.glob(os.path.join(folder, 'slots.json.*.tmp')), [], 'no temporary file is left behind')
+    equal(len(store.load_slots()), 59, 'the last complete save is what is stored')
+    store.save_slots([])
 
 
 def main():
@@ -600,7 +724,8 @@ def main():
     """
     for test in (test_rules_create, test_rules_repeats, test_rules_sequences_and_lists,
                  test_rules_edit_keeps_unsent, test_to_api, test_schema_matches_rules,
-                 test_routes, test_backup_restore, test_options, test_server):
+                 test_routes, test_backup_restore, test_options, test_server,
+                 test_start_announce_failure, test_store):
         test()
     if FAILURES:
         print('test_api: {} failure(s)'.format(len(FAILURES)))
