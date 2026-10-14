@@ -11,6 +11,9 @@ pulls any previously configured slotN_* settings across.
 
 import json
 import os
+import tempfile
+import threading
+import time
 import xml.etree.ElementTree as ET
 
 import xbmc
@@ -229,6 +232,160 @@ def _log(msg, level=xbmc.LOGINFO):
     xbmc.log('Engage slots: {}'.format(msg), level)
 
 
+# One lock for every writer in this interpreter: the API's handler threads, the
+# scheduler thread and the player callback thread all take it. The Manage slots
+# dialog runs in its own interpreter with its own copy of this module, so the
+# lock cannot reach it; the unique temporary names _write_json uses are what keep
+# a save from that side and a save from here from ever producing a half written
+# file, because each writer renames its own complete file into place.
+_WRITE_LOCK = threading.Lock()
+
+# Files whose unreadable copy could not be moved aside. save paths refuse to
+# write over one of these, so a broken slots.json is never silently replaced.
+_BLOCKED_PATHS = set()
+
+# Which files the user has already been told about this run, so the toast
+# shows once rather than on every tick.
+_BROKEN_NOTIFIED = set()
+
+
+def _write_json(path, payload, indent=None):
+    """
+    <summary>
+    Write a JSON document to path through a uniquely named temporary file in the
+    same folder and an atomic rename, under the process wide write lock.
+    </summary>
+    <param name="path">The file to write.</param>
+    <param name="payload">The value to serialise.</param>
+    <param name="indent">Passed to json.dump; None for the compact form.</param>
+    <exception cref="OSError">When the temporary file cannot be written or renamed;
+    the temporary file is removed first so nothing is left behind.</exception>
+    <exception cref="RuntimeError">When path is one whose unreadable copy could not
+    be moved aside (see _quarantine), so writing would destroy it.</exception>
+    <remarks>
+    tempfile.mkstemp gives each writer its own file, which is the whole point:
+    two writers sharing one fixed name could truncate each other and rename a
+    half written file over the real one. The mode is set to 0644 because mkstemp
+    creates files readable by the owner only and the old write used the umask.
+    </remarks>
+    """
+    if path in _BLOCKED_PATHS:
+        raise RuntimeError('{} is unreadable and could not be moved aside, refusing to write over it'.format(path))
+    with _WRITE_LOCK:
+        handle, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + '.', suffix='.tmp',
+                                       dir=os.path.dirname(path))
+        try:
+            with os.fdopen(handle, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=indent)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
+
+def _read_json_file(path):
+    """
+    <summary>
+    Read a JSON file, telling a missing file from an unreadable one.
+    </summary>
+    <param name="path">The file to read.</param>
+    <returns>(data, problem): data is the parsed value and problem '' when it read;
+    data is None and problem 'missing' when there is no such file; data is None
+    and problem the error text when the file exists but cannot be read or parsed.</returns>
+    """
+    if not os.path.exists(path):
+        return None, 'missing'
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f), ''
+    except (OSError, IOError, ValueError) as e:
+        return None, str(e) or type(e).__name__
+
+
+def _quarantine(path, why):
+    """
+    <summary>
+    Move an unreadable file aside as path.broken-&lt;timestamp&gt; so it is kept for
+    inspection and a later save cannot write over it. Nothing is ever deleted.
+    </summary>
+    <param name="path">The unreadable file.</param>
+    <param name="why">What was wrong with it, for the log.</param>
+    <returns>The path it was moved to, or None when the move failed, in which case
+    the path is added to _BLOCKED_PATHS and _write_json refuses to touch it.</returns>
+    """
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    aside = '{}.broken-{}'.format(path, stamp)
+    n = 0
+    while os.path.exists(aside):
+        n += 1
+        aside = '{}.broken-{}-{}'.format(path, stamp, n)
+    try:
+        os.replace(path, aside)
+    except OSError as e:
+        _BLOCKED_PATHS.add(path)
+        _log('{} is unreadable ({}) and could not be moved aside ({}); saves to it are refused'.format(
+            path, why, e), xbmc.LOGERROR)
+        return None
+    _BLOCKED_PATHS.discard(path)
+    _log('{} was unreadable ({}); moved aside to {} and starting afresh'.format(path, why, aside),
+         xbmc.LOGERROR)
+    return aside
+
+
+def _notify_once(key, message):
+    """
+    <summary>
+    Show an error toast the first time key is seen this run; later calls with the
+    same key are silent.
+    </summary>
+    <param name="key">What the toast is about, such as the file path.</param>
+    <param name="message">The text shown.</param>
+    <remarks>
+    xbmcgui is imported here because nothing else in this module needs the GUI,
+    and a failure to show the toast is logged rather than raised: the caller has
+    already logged the real problem.
+    </remarks>
+    """
+    if key in _BROKEN_NOTIFIED:
+        return
+    _BROKEN_NOTIFIED.add(key)
+    try:
+        import xbmcgui
+        xbmcgui.Dialog().notification('Engage', message, xbmcgui.NOTIFICATION_ERROR, 8000)
+    except Exception as e:
+        _log('could not show the notification: {}'.format(e), xbmc.LOGWARNING)
+
+
+def _load_dict(path):
+    """
+    <summary>
+    A JSON object file as a dict, empty when the file is missing, and empty after
+    an unreadable or wrongly shaped file has been moved aside.
+    </summary>
+    <param name="path">The file to read.</param>
+    <returns>The dict.</returns>
+    <remarks>
+    For the side files (catchup.json, list_progress.json) starting afresh costs at
+    most a repeated banner or a repeated item, so no toast is shown; the move and
+    the reason are in kodi.log.
+    </remarks>
+    """
+    data, problem = _read_json_file(path)
+    if problem == 'missing':
+        return {}
+    if problem:
+        _quarantine(path, problem)
+        return {}
+    if not isinstance(data, dict):
+        _quarantine(path, 'not a JSON object')
+        return {}
+    return data
+
+
 def _data_dir():
     """
     <summary>
@@ -268,11 +425,13 @@ def get_catchup_count(key):
     How many times the overdue/catch-up banner has been shown for this
     occurrence (persists across restarts).
     </summary>
+    <param name="key">The occurrence key, as scheduler.occurrence_key makes it.</param>
+    <returns>The count, 0 when there is none or the file was unreadable and has
+    been moved aside (see _load_dict).</returns>
     """
     try:
-        with open(_catchup_path(), 'r', encoding='utf-8') as f:
-            return int(json.load(f).get(key, 0))
-    except (OSError, IOError, ValueError):
+        return int(_load_dict(_catchup_path()).get(key, 0))
+    except (ValueError, TypeError):
         return 0
 
 
@@ -282,19 +441,26 @@ def bump_catchup_count(key, today_str):
     Increment the catch-up counter for this occurrence. Prunes entries from
     earlier days so the file doesn't grow. Returns the new count.
     </summary>
+    <param name="key">The occurrence key being counted.</param>
+    <param name="today_str">Today as 'YYYY-MM-DD'; keys from other days are dropped,
+    except the one being counted, which may be yesterday's when the catch-up window
+    runs past midnight.</param>
+    <returns>The new count for key.</returns>
+    <remarks>
+    Written through _write_json, so the file is never half written and a failed
+    write is logged and swallowed: the worst case is one extra banner.
+    </remarks>
     """
-    try:
-        with open(_catchup_path(), 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, IOError, ValueError):
-        data = {}
+    data = _load_dict(_catchup_path())
     # Drop any keys not from today (keys look like 'YYYY-MM-DD-<id>-<HHMM>').
-    data = {k: v for k, v in data.items() if k.startswith(today_str)}
-    data[key] = int(data.get(key, 0)) + 1
+    data = {k: v for k, v in data.items() if k.startswith(today_str) or k == key}
     try:
-        with open(_catchup_path(), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-    except (OSError, IOError) as e:
+        data[key] = int(data.get(key, 0)) + 1
+    except (ValueError, TypeError):
+        data[key] = 1
+    try:
+        _write_json(_catchup_path(), data)
+    except (OSError, IOError, RuntimeError) as e:
         _log('could not write catchup.json: {}'.format(e), xbmc.LOGWARNING)
     return data[key]
 
@@ -322,14 +488,11 @@ def get_list_progress(slot_id):
     Kept out of slots.json on purpose: the service writes this, and a write to
     slots.json from the service could race a save from the Manage slots dialog,
     which runs in its own interpreter. Keyed by slot id as a string, as JSON needs.
+    An unreadable file is moved aside by _load_dict and reads as no progress.
     </remarks>
     """
-    try:
-        with open(_list_progress_path(), 'r', encoding='utf-8') as f:
-            entry = json.load(f).get(str(slot_id))
-        return entry if isinstance(entry, dict) else None
-    except (OSError, IOError, ValueError, AttributeError):
-        return None
+    entry = _load_dict(_list_progress_path()).get(str(slot_id))
+    return entry if isinstance(entry, dict) else None
 
 
 def set_list_progress(slot_id, identity, index):
@@ -341,27 +504,19 @@ def set_list_progress(slot_id, identity, index):
     <param name="identity">functional_lists.item_identity of the item played.</param>
     <param name="index">Its position in the list at the time.</param>
     <remarks>
-    Written through a .tmp file and a rename, like slots.json. A failed write is
-    logged and swallowed: the worst case is the same item playing again next time.
-    Entries for deleted slots are left in place; they are a few bytes and are
-    harmless if a later slot reuses the id, which then just carries on from there.
+    Written through _write_json (a uniquely named temporary file, a rename and the
+    write lock), like slots.json. A failed write is logged and swallowed: the worst
+    case is the same item playing again next time. Entries for deleted slots are
+    left in place; they are a few bytes and are harmless if a later slot reuses the
+    id, which then just carries on from there.
     </remarks>
     """
     path = _list_progress_path()
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            data = {}
-    except (OSError, IOError, ValueError):
-        data = {}
+    data = _load_dict(path)
     data[str(slot_id)] = {'identity': list(identity), 'index': int(index)}
     try:
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
-    except (OSError, IOError) as e:
+        _write_json(path, data)
+    except (OSError, IOError, RuntimeError) as e:
         _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
 
 
@@ -376,15 +531,13 @@ def get_series_progress(slot_id):
     yet or the file cannot be read.</returns>
     <remarks>
     Kept in list_progress.json under a 'series' key beside the in turn entries, which
-    are keyed by slot id and so can never collide with it.
+    are keyed by slot id and so can never collide with it. An unreadable file is
+    moved aside by _load_dict and reads as no progress.
     </remarks>
     """
-    try:
-        with open(_list_progress_path(), 'r', encoding='utf-8') as f:
-            entry = (json.load(f).get('series') or {}).get(str(slot_id))
-        return entry if isinstance(entry, dict) else {}
-    except (OSError, IOError, ValueError, AttributeError):
-        return {}
+    series = _load_dict(_list_progress_path()).get('series')
+    entry = series.get(str(slot_id)) if isinstance(series, dict) else None
+    return entry if isinstance(entry, dict) else {}
 
 
 def set_series_progress(slot_id, group, identity, index):
@@ -397,29 +550,20 @@ def set_series_progress(slot_id, group, identity, index):
     <param name="identity">functional_lists.item_identity of the item played.</param>
     <param name="index">Its position in the series at the time.</param>
     <remarks>
-    Written through a .tmp file and a rename. A failed write is logged and
-    swallowed: the worst case is the same film of that series coming up again.
+    Written through _write_json, like set_list_progress. A failed write is logged
+    and swallowed: the worst case is the same film of that series coming up again.
     </remarks>
     """
     path = _list_progress_path()
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            data = {}
-    except (OSError, IOError, ValueError):
-        data = {}
+    data = _load_dict(path)
     series = data.get('series') if isinstance(data.get('series'), dict) else {}
     entry = series.get(str(slot_id)) if isinstance(series.get(str(slot_id)), dict) else {}
     entry[group] = {'identity': list(identity), 'index': int(index)}
     series[str(slot_id)] = entry
     data['series'] = series
     try:
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
-    except (OSError, IOError) as e:
+        _write_json(path, data)
+    except (OSError, IOError, RuntimeError) as e:
         _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
 
 
@@ -539,15 +683,36 @@ def load_slots():
     <summary>
     Return the list of slot dicts. Runs settings migration on first call.
     </summary>
+    <returns>The slots. Empty when there is no slots.json yet, and empty after a
+    slots.json that exists but cannot be read has been moved aside.</returns>
+    <remarks>
+    A missing file and an unreadable file are different things. The first is a
+    fresh install. The second used to read as an empty list with a warning, after
+    which the next add from the dialog or the API wrote a one slot file over the
+    top and every other slot was gone. Now the unreadable file is moved aside as
+    slots.json.broken-&lt;timestamp&gt; (never deleted), the error goes to kodi.log, the
+    user is told once, and this returns an empty list, so a later save starts a new
+    file beside the kept one. When the move itself fails the path is blocked and
+    save_slots raises rather than overwrite it.
+    </remarks>
     """
     migrate_from_settings_if_needed()
-    try:
-        with open(_file_path(), 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data.get('slots', []) or []
-    except (OSError, IOError, ValueError) as e:
-        _log('failed to read slots.json: {}'.format(e), xbmc.LOGWARNING)
+    path = _file_path()
+    data, problem = _read_json_file(path)
+    if problem == 'missing':
         return []
+    if not problem:
+        if isinstance(data, dict) and isinstance(data.get('slots', []), list):
+            _BLOCKED_PATHS.discard(path)
+            return data.get('slots') or []
+        problem = 'not an Engage slots document'
+    aside = _quarantine(path, problem)
+    if aside:
+        _notify_once(path, 'The slots file could not be read. It was kept as {}; see kodi.log.'.format(
+            os.path.basename(aside)))
+    else:
+        _notify_once(path, 'The slots file could not be read and slots cannot be saved; see kodi.log.')
+    return []
 
 
 def save_slots(slots):
@@ -556,21 +721,21 @@ def save_slots(slots):
     Atomically write the slot list, then tell the running service about it.
     </summary>
     <param name="slots">The full list of slot dicts to persist.</param>
+    <exception cref="RuntimeError">When slots.json is unreadable and could not be
+    moved aside; writing would destroy the only copy (see load_slots).</exception>
     <remarks>
-    The write goes to a .tmp file first and is renamed over slots.json, so a
-    crash mid-write leaves the old file intact. Once the rename has landed the
-    save is announced with NotifyAll so the service, which runs in a separate
-    interpreter, can refresh the Home window properties skins read. Every save
-    path (add, edit, duplicate, delete, restore) comes through here, which is
-    why the announcement lives in the store and not in the dialog code.
+    The write goes through _write_json: a uniquely named temporary file in the
+    same folder renamed over slots.json under the write lock, so a crash mid-write
+    leaves the old file intact and two writers never share a temporary file. Once
+    the rename has landed the save is announced with NotifyAll so the service,
+    which runs in a separate interpreter, can refresh the Home window properties
+    skins read. Every save path (add, edit, duplicate, delete, restore) comes
+    through here, which is why the announcement lives in the store and not in the
+    dialog code.
     </remarks>
     """
     payload = {'version': 1, 'slots': slots}
-    path = _file_path()
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, path)
+    _write_json(_file_path(), payload, indent=2)
     _announce_saved()
 
 

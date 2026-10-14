@@ -624,6 +624,19 @@ def test_repeats():
           ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '31st'], 'ordinals')
 
 
+def test_bad_numbers():
+    """<summary>Hand edited numbers fall back, and an unreadable slot never stops the others.</summary>"""
+    odd = scheduler.Slot({'id': 3, 'hour': '', 'minute': 'x', 'warning': None, 'days': ['Monday']})
+    equal((odd.hour, odd.minute, odd.warning, odd.index), (19, 0, 5, 2), 'blank numbers take the defaults')
+    wide = scheduler.Slot({'id': 'seven', 'hour': 25, 'minute': 61, 'warning': -4})
+    equal((wide.hour, wide.minute, wide.warning, wide.index), (23, 59, 0, -1), 'out of range numbers are clamped')
+    good = dict(store.new_slot(favourite='Fine'), id=1)
+    store._write_json(store._file_path(), {'version': 1, 'slots': [good, 'junk', dict(good, id=2)]}, indent=2)
+    sched = make_scheduler()
+    equal([s.id for s in sched._reload_slots()], [1, 2], 'an entry Slot() cannot read is skipped, the rest load')
+    check(('unreadable', 'None') in sched._warned_misconfig, 'and warned about once')
+
+
 def test_monthly_occurrences():
     """<summary>The next-slot walk finds a monthly slot inside the look ahead window only.</summary>"""
     sched = make_scheduler()
@@ -638,7 +651,8 @@ def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
                  test_random_any_mode, test_series_pool, test_random_sequels,
-                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences):
+                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences,
+                 test_bad_numbers):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:

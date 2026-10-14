@@ -32,6 +32,30 @@ BTN_STOP_RESUME = 9005
 SNOOZE_OPTIONS_LABELS = ['5 minutes', '10 minutes', '15 minutes', '30 minutes', '1 hour']
 SNOOZE_OPTIONS_VALUES = [5, 10, 15, 30, 60]
 
+# How far past its scheduled time a banner may open and still fire its timeout
+# action on its own. Matches the scheduler's two minute grace: inside it the
+# banner is for a slot that is due now; beyond it the banner is a catch-up for
+# a slot missed hours ago, and that one waits for the user.
+AUTOFIRE_GRACE_SECONDS = 120
+
+
+def allow_autofire(scheduled_dt, now):
+    """
+    <summary>
+    Whether a banner opening now for scheduled_dt may resolve itself when its
+    countdown reaches zero.
+    </summary>
+    <param name="scheduled_dt">When the slot is due.</param>
+    <param name="now">When the banner is opening.</param>
+    <returns>True while the scheduled time is ahead or no more than
+    AUTOFIRE_GRACE_SECONDS behind; False for an overdue catch-up banner.</returns>
+    <remarks>
+    Until this existed any banner opened at or after its time waited for the user,
+    which meant a warning 0 slot's "When the countdown ends" choice never fired.
+    </remarks>
+    """
+    return (scheduled_dt - now).total_seconds() > -AUTOFIRE_GRACE_SECONDS
+
 
 def _log(msg, level=xbmc.LOGINFO):
     """
@@ -59,10 +83,11 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
         the countdown thread.
         </summary>
         <remarks>
-        Whether the countdown may fire the timeout action on its own is decided here: only
-        when the scheduled time was still ahead as the banner opened. An overdue catch-up
-        banner therefore waits for the user. The canresume property drives the visibility
-        of the Queue Next and Stop & Resume After buttons in the skin.
+        Whether the countdown may fire the timeout action on its own is decided here by
+        allow_autofire: when the scheduled time was ahead, or no more than the grace
+        behind, as the banner opened. An overdue catch-up banner therefore waits for the
+        user. The canresume property drives the visibility of the Queue Next and Stop &
+        Resume After buttons in the skin.
         </remarks>
         """
         if not hasattr(self, 'show_name'):
@@ -82,10 +107,10 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
 
         self._stop_timer = False
         self._user_decided = False
-        # Only auto-fire at countdown zero if there was still time on the
-        # clock when the banner opened. Catch-up prompts (already overdue)
-        # must wait for the user, auto-playing hours late would be rude.
-        self._allow_autofire = (self.scheduled_dt - datetime.now()).total_seconds() > 0
+        # Only auto-fire at countdown zero if the banner opened on time or
+        # within the grace. Catch-up prompts (overdue by more than that) must
+        # wait for the user, auto-playing hours late would be rude.
+        self._allow_autofire = allow_autofire(self.scheduled_dt, datetime.now())
 
         self.setProperty('showname', self.show_name)
         self.setProperty('episode', self.episode_label)

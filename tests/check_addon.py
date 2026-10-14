@@ -16,6 +16,7 @@ Usage:
 </remarks>
 """
 
+import ast
 import os
 import re
 import sys
@@ -23,7 +24,12 @@ import xml.etree.ElementTree as ET
 
 ADDON_ID = 'service.engage'
 PREFIX = 'Engage'
-TEXT_SUFFIXES = ('.py', '.xml', '.po', '.md', '.sh', '.txt', '.json', '.cfg', '.ini', '')
+TEXT_SUFFIXES = ('.py', '.xml', '.po', '.md', '.sh', '.txt', '.json', '.cfg', '.ini', '',
+                 '.html', '.js', '.css')
+# The oldest Python the add-on must run on: Kodi 20 and 21 bundle 3.8 on the
+# TVs, whatever this build box runs. check_python parses every file as that
+# version so a newer construct fails the gate here rather than on a TV.
+OLDEST_PYTHON = (3, 8)
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules',
              PREFIX + ' Dist', PREFIX + ' Git', PREFIX + ' App'}
 
@@ -70,6 +76,11 @@ TOKEN_SHAPES = re.compile(r'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AK
 # Private and CGNAT address ranges. Example addresses in docs and tests are
 # 123.123.123.x only, so any of these is a real address by definition.
 PRIVATE_IP = re.compile(r'\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01])|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))\.\d{1,3}\.\d{1,3}\b')
+# A long dash written as an escape: a backslash u2014 or backslash U0000201x in
+# Python or JavaScript, or an HTML entity, decimal or hex in either case. The
+# literal character check below cannot see these, and twelve shipped in
+# JellyStat 0.27.0 that way. Hyphens are not touched; code is full of them.
+ESCAPED_DASH = re.compile(r'\\u201[345]|\\U0000201[345]|&[mn]dash;|&#821[123];|&#[xX]201[345];')
 
 failures = []
 
@@ -172,18 +183,34 @@ def check_python(root):
     """
     <summary>
     Compile every .py file under root and record a failure, with the line, for each
-    syntax error.
+    syntax error, then parse it again as OLDEST_PYTHON and record a failure for any
+    construct that version does not have.
     </summary>
     <param name="root">The tree to check.</param>
+    <remarks>
+    ast.parse with feature_version refuses the grammar added after that version
+    (match statements, except groups, type statements and so on), which the plain
+    compile on a newer build box would wave through. It is a grammar check only:
+    a newer library call such as str.removeprefix still parses, so those stay a
+    review matter.
+    </remarks>
     """
     for folder, name in walk_text_files(root):
         if not name.endswith('.py'):
             continue
         path = os.path.join(folder, name)
+        relative = os.path.relpath(path, root)
         try:
-            compile(read(path), path, 'exec')
+            source = read(path)
+            compile(source, path, 'exec')
         except SyntaxError as exc:
-            fail('{} does not compile: line {}: {}'.format(os.path.relpath(path, root), exc.lineno, exc.msg))
+            fail('{} does not compile: line {}: {}'.format(relative, exc.lineno, exc.msg))
+            continue
+        try:
+            ast.parse(source, path, feature_version=OLDEST_PYTHON)
+        except SyntaxError as exc:
+            fail('{} needs a newer Python than {}.{}: line {}: {}'.format(
+                relative, OLDEST_PYTHON[0], OLDEST_PYTHON[1], exc.lineno, exc.msg))
 
 
 def check_house_rules(root):
@@ -195,11 +222,11 @@ def check_house_rules(root):
     </summary>
     <param name="root">The tree to check.</param>
     <remarks>
-    The checker exempts itself from the trailer, token and address rules because it has
+    The checker exempts itself from the escaped dash, trailer, token and address rules because it has
     to spell out the patterns it looks for. Files that do not decode as UTF-8 are skipped.
     </remarks>
     """
-    dashes = ('\u2014', '\u2013')  # em dash and en dash, spelled as escapes so this file passes its own check
+    dashes = (chr(0x2014), chr(0x2013))  # em dash and en dash, by code point so this file passes its own checks
     for folder, name in walk_text_files(root):
         relative = os.path.relpath(os.path.join(folder, name), root)
         if SECRET_NAMES.search(name):
@@ -213,6 +240,8 @@ def check_house_rules(root):
         for line_number, line in enumerate(text.splitlines(), 1):
             if any(dash in line for dash in dashes):
                 fail('{}:{} contains a dash character that the house rules disallow'.format(relative, line_number))
+            if ESCAPED_DASH.search(line) and name != 'check_addon.py':
+                fail('{}:{} writes a dash as an escape, which the house rules disallow too'.format(relative, line_number))
             if 'Co-Authored-By' in line and name != 'check_addon.py':
                 fail('{}:{} carries an attribution trailer'.format(relative, line_number))
             if TOKEN_SHAPES.search(line) and name != 'check_addon.py':

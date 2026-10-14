@@ -31,12 +31,18 @@ import xbmcaddon
 import xbmcgui
 
 from resources.lib import functional_lists
+from resources.lib import slot_rules
 from resources.lib.slots import SLOTS_SAVED_MESSAGE
 
 ADDON_ID = 'service.engage'
 DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 SNOOZE_MINUTES = 5
 STARTUP_REST_SECONDS = 20  # let Kodi fully settle at login before the first prompt
+# The countdown a banner gets when it opens at or after its scheduled time: a
+# snooze running out, or a slot reached with no warning window (warning 0, or
+# Kodi started right at the time). Long enough to answer, short enough that
+# "play at the set time" still means that.
+LATE_BANNER_SECONDS = 60
 # Used only when the recent_watch_hours setting cannot be read. Matches the
 # default declared in resources/settings.xml.
 RECENT_WATCH_FALLBACK_HOURS = 4
@@ -107,8 +113,10 @@ def when_label(due, now):
     </summary>
     <param name="due">The occurrence's datetime.</param>
     <param name="now">The current time; only its date matters.</param>
-    <returns>'Tonight HH:MM' for today, 'Tomorrow HH:MM', then 'Weekday HH:MM'
-    within the week and 'Weekday dd/mm/yyyy HH:MM' beyond that.</returns>
+    <returns>'Yesterday HH:MM' for an overdue occurrence from the day before (one
+    still inside the catch-up window), 'Tonight HH:MM' for today, 'Tomorrow HH:MM',
+    then 'Weekday HH:MM' within the week and 'Weekday dd/mm/yyyy HH:MM' beyond
+    that.</returns>
     <remarks>
     Today reads 'Tonight' whatever the hour, which is what the skin asked for.
     The dated form starts at seven days ahead, where a bare weekday would
@@ -117,7 +125,9 @@ def when_label(due, now):
     """
     time_text = '{:02d}:{:02d}'.format(due.hour, due.minute)
     days_ahead = (due.date() - now.date()).days
-    if days_ahead <= 0:
+    if days_ahead < 0:
+        return 'Yesterday {}'.format(time_text)
+    if days_ahead == 0:
         return 'Tonight {}'.format(time_text)
     if days_ahead == 1:
         return 'Tomorrow {}'.format(time_text)
@@ -202,12 +212,15 @@ class Slot:
         <remarks>
         index is id minus one and exists only so log lines can say 'slot 3' via index + 1.
         timeout_action is resolved through slots.timeout_action_of so an old slot without
-        the key gets the default.
+        the key gets the default. hour, minute and warning are read with
+        slot_rules._int_or and clamped to their ranges, so a hand edited value such as
+        '' or 25 gives the default rather than an exception that would stop every slot;
+        the dialog and the API only ever store whole numbers in range.
         </remarks>
         """
         self.id = data.get('id', 0)
         # Kept for log readability, "slot 3" rather than internal ids.
-        self.index = self.id - 1
+        self.index = slot_rules._int_or(self.id, 0) - 1
         self.enabled = bool(data.get('enabled', False))
         self.label = data.get('label') or ''
         # Multiple days supported via 'days'; fall back to legacy single 'day'.
@@ -220,9 +233,9 @@ class Slot:
         self.week_start = repeat_store.week_start_of(data)
         self.month_day = repeat_store.month_day_of(data)
         self.month = repeat_store.month_of(data)
-        self.hour = int(data.get('hour', 19))
-        self.minute = int(data.get('minute', 0))
-        self.warning = int(data.get('warning', 5))
+        self.hour = min(max(slot_rules._int_or(data.get('hour'), 19), 0), 23)
+        self.minute = min(max(slot_rules._int_or(data.get('minute'), 0), 0), 59)
+        self.warning = max(slot_rules._int_or(data.get('warning'), 5), 0)
         self.favourite = data.get('favourite') or ''
         self.autoopen = bool(data.get('autoopen', False))
         self.snooze_enabled = bool(data.get('snooze', True))
@@ -329,8 +342,9 @@ class EngageScheduler:
     acts on the answer.
     </summary>
     <remarks>
-    Per-day state (triggered, warned, cancelled, snoozed) is keyed by _today_key and
-    purged each tick. queued_next and resume_after carry the Queue Next and Stop &
+    Per occurrence state (triggered, warned, cancelled, snoozed) is keyed by
+    occurrence_key and purged by _purge_trackers each tick once it can no longer be
+    acted on. queued_next and resume_after carry the Queue Next and Stop &
     Resume After choices across the playback events _EngagePlayerMonitor reports.
     </remarks>
     """
@@ -362,6 +376,11 @@ class EngageScheduler:
         # item here; _resume_armed gates resuming until the slot itself ends.
         self.resume_after = None
         self._resume_armed = False
+        # True while _stop_and_requeue is stopping playback itself. Kodi
+        # reports that stop through onPlayBackStopped like any other, and
+        # without this the queue would be fired by our own stop; see
+        # _on_playback_ended.
+        self._stopping_on_purpose = False
         # A random list slot's pick, keyed by occurrence like the trackers
         # above, so the banner, a snoozed re-prompt and the playback all name
         # the same item. Purged with them when the day rolls over.
@@ -415,17 +434,27 @@ class EngageScheduler:
         <remarks>
         A sequence with no items, a favourite slot with no favourite, or a list slot whose
         Functional list is missing or empty, is skipped with one warning per slot id per
-        service run. A missing label defaults to the favourite name, the list name, or
-        'Sequence'. Reading every tick means edits made in the Manage slots dialog, and
-        changes made to a list in the skin, take effect without a restart. The skin's
-        lists.json is read at most once per call.
+        service run, and so is a slot dict that Slot() cannot read at all (a hand edited
+        file), so one bad entry never stops the others. A missing label defaults to the
+        favourite name, the list name, or 'Sequence'. Reading every tick means edits
+        made in the Manage slots dialog, and changes made to a list in the skin, take
+        effect without a restart. The skin's lists.json is read at most once per call.
         </remarks>
         """
         from resources.lib import slots as slot_store
         slots = []
         skin_lists = None
         for data in slot_store.load_slots():
-            slot = Slot(data)
+            try:
+                slot = Slot(data)
+            except Exception as e:
+                bad_id = data.get('id') if isinstance(data, dict) else None
+                marker = ('unreadable', str(bad_id))
+                if marker not in self._warned_misconfig:
+                    self._log('Slot {}: cannot be read ({}: {}), skipping'.format(
+                        bad_id, type(e).__name__, e), xbmc.LOGWARNING)
+                    self._warned_misconfig.add(marker)
+                continue
             if not slot.enabled:
                 continue
             if slot.kind == 'list':
@@ -476,20 +505,58 @@ class EngageScheduler:
         """
         return occurrence_key(slot, datetime.now())
 
-    def _get_scheduled_dt(self, slot):
+    def _get_scheduled_dt(self, slot, now=None):
         """
         <summary>
         Return today's datetime for this slot if today matches, else None.
         </summary>
+        <param name="slot">The slot.</param>
+        <param name="now">The tick's time, whose date is 'today'; datetime.now() when
+        omitted.</param>
+        <returns>The datetime, or None.</returns>
         <remarks>
         Whether today counts is Slot.runs_on: a one-shot date, else the weekly days,
         the days of an on week for every few weeks, the monthly day or the yearly date.
         </remarks>
         """
-        now = datetime.now()
+        if now is None:
+            now = datetime.now()
         if not slot.runs_on(now.date()):
             return None
         return now.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
+
+    def _due_occurrences(self, slot, now):
+        """
+        <summary>
+        The occurrences of a slot that this tick has to look at: yesterday's, when it is
+        still live, then today's.
+        </summary>
+        <param name="slot">An enabled slot.</param>
+        <param name="now">The tick's time.</param>
+        <returns>A list of (scheduled_dt, key) tuples, earliest first; empty when the
+        slot runs on neither day.</returns>
+        <remarks>
+        Yesterday's occurrence counts while the catch-up window still covers it (a
+        22:00 slot with a 6 hour window is still live at 00:30), and while a snooze
+        taken on it is still running, whatever the window. Before this the scheduler
+        only ever looked at today, so a slot missed late in the evening and Kodi
+        turned on after midnight was skipped without a word, and a snooze that ran
+        past midnight never came back.
+        </remarks>
+        """
+        found = []
+        hours = self._catchup_hours()
+        yesterday = now - timedelta(days=1)
+        if slot.runs_on(yesterday.date()):
+            due = yesterday.replace(hour=slot.hour, minute=slot.minute, second=0, microsecond=0)
+            key = occurrence_key(slot, due)
+            live = hours > 0 and now <= due + timedelta(hours=hours)
+            if live or key in self.snoozed:
+                found.append((due, key))
+        today_dt = self._get_scheduled_dt(slot, now)
+        if today_dt is not None:
+            found.append((today_dt, occurrence_key(slot, today_dt)))
+        return found
 
     def _activate_favourite(self, favourite_name):
         """
@@ -1233,6 +1300,16 @@ class EngageScheduler:
         Stop what's playing now, remember it (and its position), play the
         slot, then resume the interrupted item when the slot finishes.
         </summary>
+        <param name="slot">The slot to play.</param>
+        <param name="key">Its occurrence key.</param>
+        <remarks>
+        The stop issued here reaches _on_playback_ended like a stop by the user, and
+        used to fire whatever was waiting in queued_next, which this slot then
+        replaced 800 ms later, losing the queued slot. _stopping_on_purpose is raised
+        around the stop so that callback leaves the queue alone; it is lowered again
+        after the settle, whether or not the callback came, so a later real stop is
+        never swallowed.
+        </remarks>
         """
         player = xbmc.Player()
         if player.isPlaying():
@@ -1250,8 +1327,12 @@ class EngageScheduler:
             else:
                 self._log('Could not capture resume info', xbmc.LOGWARNING)
                 self.resume_after = None
-            player.stop()
-            xbmc.sleep(800)  # let the stop settle before opening the slot
+            self._stopping_on_purpose = True
+            try:
+                player.stop()
+                xbmc.sleep(800)  # let the stop settle before opening the slot
+            finally:
+                self._stopping_on_purpose = False
         self._play_slot(slot, key)
         self.triggered[key] = True
 
@@ -1327,7 +1408,16 @@ class EngageScheduler:
         <summary>
         Called by the player monitor when current playback stops/ends.
         </summary>
+        <remarks>
+        A stop that _stop_and_requeue issued itself is ignored: the slot it is about
+        to play is not "what was playing ending", and a queued slot must not be fired
+        by it.
+        </remarks>
         """
+        if self._stopping_on_purpose:
+            self._stopping_on_purpose = False
+            self._log('Playback stopped by Engage itself, the queue is left alone')
+            return
         # Resume-after takes priority over a queued slot.
         if self.resume_after and self._resume_armed:
             info = self.resume_after
@@ -1754,14 +1844,17 @@ class EngageScheduler:
         <returns>A list of (due, key) tuples, the occurrence's datetime and its tracker
         key, empty when there is none within NEXT_LOOKAHEAD_DAYS.</returns>
         <remarks>
-        Walks today and the next NEXT_LOOKAHEAD_DAYS days, keeping each day Slot.runs_on
-        accepts, at the slot's hour and minute. So a monthly or yearly slot appears only
-        once its day is within the look ahead window, as _get_scheduled_dt would see it.
-        An occurrence is skipped when its key is in triggered or cancelled, so a slot
-        played, skipped as recently watched or cancelled today does not show as next.
-        An occurrence whose time has passed is still offered while the scheduler would
-        still prompt for it: within the catch-up window, or two minutes when that is
-        off. Beyond that it is gone for the day and the following occurrence is next.
+        Walks yesterday, today and the next NEXT_LOOKAHEAD_DAYS days, keeping each day
+        Slot.runs_on accepts, at the slot's hour and minute. So a monthly or yearly slot
+        appears only once its day is within the look ahead window, as _get_scheduled_dt
+        would see it. An occurrence is skipped when its key is in triggered or
+        cancelled, so a slot played, skipped as recently watched or cancelled today
+        does not show as next. An occurrence whose time has passed is still offered
+        while the scheduler would still prompt for it: within the catch-up window, or
+        two minutes when that is off, or while a snooze taken on it is running. Beyond
+        that it is gone and the following occurrence is next. Yesterday is walked for
+        the same reason _due_occurrences looks at it: a late slot inside the catch-up
+        window is still the next thing to happen after midnight.
         </remarks>
         """
         hours = self._catchup_hours()
@@ -1770,7 +1863,7 @@ class EngageScheduler:
         else:
             live_for = timedelta(minutes=NEXT_GRACE_MINUTES)
         found = []
-        for offset in range(NEXT_LOOKAHEAD_DAYS + 1):
+        for offset in range(-1, NEXT_LOOKAHEAD_DAYS + 1):
             day = (now + timedelta(days=offset)).date()
             if not slot.runs_on(day):
                 continue
@@ -1778,7 +1871,7 @@ class EngageScheduler:
             key = occurrence_key(slot, due)
             if key in self.triggered or key in self.cancelled:
                 continue
-            if due < now and now > due + live_for:
+            if due < now and now > due + live_for and key not in self.snoozed:
                 continue
             found.append((due, key))
         return found
@@ -2132,15 +2225,6 @@ class EngageScheduler:
         self._check_test_mode()
 
         now = datetime.now()
-        today_str = now.strftime('%Y-%m-%d')
-
-        # Purge stale tracking entries from previous days
-        for tracker in (self.triggered, self.warned, self.cancelled, self.snoozed,
-                        self._list_picks):
-            stale = [k for k in tracker if not k.startswith(today_str)]
-            for k in stale:
-                del tracker[k]
-
         slots = self._reload_slots()
         self._debug('Checking {} enabled slots at {}'.format(len(slots), now.strftime('%H:%M:%S')))
 
@@ -2152,31 +2236,93 @@ class EngageScheduler:
                 self._log('Slot {} processing failed:\n{}'.format(
                     slot.index + 1, traceback.format_exc()), xbmc.LOGERROR)
 
+        # After the pass, so a snooze that ran out since the last tick has been
+        # acted on before its entry could be dropped as stale.
+        self._purge_trackers(now)
+
         # Last, so whatever this tick played, snoozed or cancelled is reflected.
         self._publish_next('tick', slots)
+
+    def _purge_trackers(self, now):
+        """
+        <summary>
+        Drop per occurrence state the scheduler can no longer act on.
+        </summary>
+        <param name="now">The tick's time.</param>
+        <remarks>
+        Today's keys always stay. Yesterday's stay while the catch-up window can still
+        reach an occurrence from yesterday, which is until midnight plus the window,
+        so a catch-up banner answered at 00:30 is not shown again at 00:31. A snooze
+        stays while its expiry is ahead whatever its date, so a snooze taken at 23:30
+        for an hour still comes back at 00:30; the snooze branch of _process_occurrence
+        removes it once it has been acted on. A random list pick stays while its key
+        is still snoozed, so the banner that comes back names the same film. Before
+        this everything not from today went at the first tick after midnight. Runs
+        after the slot pass, not before it, so an expired snooze is brought back by
+        _process_occurrence before this could count it as spent.
+        </remarks>
+        """
+        keep_dates = {now.strftime('%Y-%m-%d')}
+        hours = self._catchup_hours()
+        if hours > 0:
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if now < midnight + timedelta(hours=hours):
+                keep_dates.add((now - timedelta(days=1)).strftime('%Y-%m-%d'))
+        for key, until in list(self.snoozed.items()):
+            if key[:10] not in keep_dates and until <= now:
+                del self.snoozed[key]
+        for tracker in (self.triggered, self.warned, self.cancelled):
+            for key in [k for k in tracker if k[:10] not in keep_dates]:
+                del tracker[key]
+        for key in [k for k in self._list_picks if k[:10] not in keep_dates and k not in self.snoozed]:
+            del self._list_picks[key]
 
     def _process_slot(self, slot, now):
         """
         <summary>
         Evaluate a single slot against the current time.
         </summary>
+        <param name="slot">An enabled slot from _reload_slots.</param>
+        <param name="now">The tick's time.</param>
         <remarks>
-        A slot skipped because its show was watched recently is recorded in triggered,
-        the same tracker a played slot uses, so it stays quiet until the day rolls over.
+        Every occurrence _due_occurrences returns is put through _process_occurrence,
+        yesterday's (when still live) before today's.
         </remarks>
         """
-        key = self._today_key(slot)
+        for scheduled_dt, key in self._due_occurrences(slot, now):
+            self._process_occurrence(slot, now, scheduled_dt, key)
 
+    def _process_occurrence(self, slot, now, scheduled_dt, key):
+        """
+        <summary>
+        Evaluate one occurrence of a slot against the current time: open the warning
+        window, bring back a snooze, catch up a missed one, or play it.
+        </summary>
+        <param name="slot">The slot.</param>
+        <param name="now">The tick's time.</param>
+        <param name="scheduled_dt">When this occurrence is due.</param>
+        <param name="key">Its tracker key, from occurrence_key.</param>
+        <remarks>
+        A slot skipped because its show was watched recently is recorded in triggered,
+        the same tracker a played slot uses, so it stays quiet until its key is purged.
+        An autoopen slot ("Skip the banner, just play at the set time") gets no banner
+        in its warning window: nothing happens until the set time, when it plays. Any
+        queued_next entry carrying its key is dropped first, because a banner that was
+        left to time out to Queue Next would otherwise play the slot a second time
+        when the current playback ends. A banner for an occurrence reached with no
+        warning window (warning 0, or Kodi started right at the time) counts down
+        LATE_BANNER_SECONDS from now, so its timeout action can still fire; the
+        catch-up banner for an occurrence hours late keeps waiting for the user.
+        </remarks>
+        """
         if key in self.triggered or key in self.cancelled:
-            return
-
-        scheduled_dt = self._get_scheduled_dt(slot)
-        if scheduled_dt is None:
             return
 
         warning_dt = scheduled_dt - timedelta(minutes=slot.warning)
         if now < warning_dt:
             return  # nothing happens before the warning window opens
+        if slot.autoopen and now < scheduled_dt:
+            return  # no banner for a slot that plays itself at the set time
 
         snooze_until = self.snoozed.get(key)
 
@@ -2200,7 +2346,8 @@ class EngageScheduler:
             # or cancel; ignoring it auto-plays when the countdown hits zero.
             del self.snoozed[key]
             self._log('Snooze expired for slot {}, re-showing prompt'.format(slot.index + 1))
-            action, snooze_min = self._handle_warning(slot, now + timedelta(seconds=60), key)
+            action, snooze_min = self._handle_warning(
+                slot, now + timedelta(seconds=LATE_BANNER_SECONDS), key)
             self._apply_prompt_action(slot, key, action, snooze_min)
             return
 
@@ -2211,10 +2358,7 @@ class EngageScheduler:
         if now > scheduled_dt + timedelta(minutes=2):
             if key in self.warned:
                 return
-            try:
-                catchup_hours = xbmcaddon.Addon(ADDON_ID).getSettingInt('catchup_hours')
-            except Exception:
-                catchup_hours = 6
+            catchup_hours = self._catchup_hours()
             if catchup_hours > 0 and now <= scheduled_dt + timedelta(hours=catchup_hours):
                 # Cap how many times a missed-slot banner appears (persists
                 # across restarts) so it stops nagging.
@@ -2255,6 +2399,13 @@ class EngageScheduler:
         # Scheduled time reached
         elif now >= scheduled_dt:
             if slot.autoopen:
+                # A banner left to time out to Queue Next would otherwise play
+                # this occurrence again when the current playback ends.
+                queued = [(s, k) for s, k in self.queued_next if k == key]
+                if queued:
+                    self.queued_next = [(s, k) for s, k in self.queued_next if k != key]
+                    self._log('Slot {} was queued for this occurrence too, dropping the queue entry'.format(
+                        slot.index + 1))
                 xbmcgui.Dialog().notification(
                     'Engage',
                     '{} is ready.'.format(slot.label),
@@ -2265,8 +2416,11 @@ class EngageScheduler:
                 self.triggered[key] = True
                 self._log('Slot {} auto-opened at scheduled time'.format(slot.index + 1))
             elif key not in self.warned:
-                # Kodi started right at/after the time, no warning was shown, no auto-open
-                action, snooze_min = self._handle_warning(slot, scheduled_dt, key)
+                # No warning window was shown (warning 0, or Kodi started right
+                # at the time): give the banner a short countdown from now so
+                # its timeout action still fires rather than waiting for ever.
+                countdown_to = max(scheduled_dt, now + timedelta(seconds=LATE_BANNER_SECONDS))
+                action, snooze_min = self._handle_warning(slot, countdown_to, key)
                 self._apply_prompt_action(slot, key, action, snooze_min)
                 if action != 'skip':
                     self.warned[key] = True

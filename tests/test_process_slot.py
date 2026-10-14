@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""
+<summary>
+Unit test for the scheduler's handling of one occurrence of a slot
+(EngageScheduler._process_slot and the trackers around it): an autoopen slot
+gets no banner and never plays twice, a snooze and a catch-up both survive
+midnight, a stop issued by Stop and Resume After leaves the queue alone, and a
+banner reached with no warning window still counts down so its timeout action
+can fire.
+</summary>
+<remarks>
+Run by build-zip.sh before anything is zipped; exits non zero on the first
+failure reported. No Kodi is needed: the xbmc modules are stubbed in sys.modules
+before the scheduler is imported, the clock is pinned through a datetime
+subclass, the banner is replaced by a function that records the call and answers
+with a chosen action, and playback is recorded rather than started.
+
+Usage:
+    python3 tests/test_process_slot.py
+</remarks>
+"""
+
+import json
+import os
+import sys
+import tempfile
+import types
+from datetime import datetime, timedelta
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ADDON_DIR = os.path.join(ROOT, 'service.engage')
+DATA_DIR = tempfile.mkdtemp(prefix='engage-process-test-')
+
+# --- Kodi stubs, installed before the add-on modules are imported -----------
+
+NOTIFIED = []
+PLAYING = [False]
+
+
+class _Window:
+    """<summary>Stand-in for xbmcgui.Window: one shared property dict.</summary>"""
+    props = {}
+
+    def __init__(self, window_id):
+        pass
+
+    def getProperty(self, key):
+        return self.props.get(key, '')
+
+    def setProperty(self, key, value):
+        self.props[key] = value
+
+    def clearProperty(self, key):
+        self.props.pop(key, None)
+
+
+class _Addon:
+    """<summary>Stand-in for xbmcaddon.Addon with the settings the scheduler reads.</summary>"""
+    settings = {'catchup_hours': 6, 'catchup_max_prompts': 3, 'debug': False, 'poll_interval': 30,
+                'test_mode': False, 'recent_watch_hours': 0}
+
+    def __init__(self, addon_id=None):
+        pass
+
+    def getSettingInt(self, key):
+        return int(self.settings[key])
+
+    def getSettingBool(self, key):
+        return bool(self.settings[key])
+
+    def setSettingBool(self, key, value):
+        self.settings[key] = value
+
+    def getSetting(self, key):
+        return str(self.settings.get(key, ''))
+
+    def setSetting(self, key, value):
+        self.settings[key] = value
+
+    def getAddonInfo(self, key):
+        return ADDON_DIR if key == 'path' else '0.0.0'
+
+
+class _Monitor:
+    """<summary>Stand-in for xbmc.Monitor that never aborts.</summary>"""
+
+    def abortRequested(self):
+        return False
+
+    def waitForAbort(self, seconds=0):
+        return False
+
+
+class _Player:
+    """
+    <summary>
+    Stand-in for xbmc.Player whose playing state the tests set, and whose stop()
+    reports itself the way Kodi does, through the scheduler's playback ended hook.
+    </summary>
+    """
+    on_stop = None
+
+    def isPlaying(self):
+        return PLAYING[0]
+
+    def stop(self):
+        PLAYING[0] = False
+        if _Player.on_stop is not None:
+            _Player.on_stop()
+
+    def play(self, path):
+        PLAYING[0] = True
+
+
+class _Dialog:
+    """<summary>Stand-in for xbmcgui.Dialog that records notifications.</summary>"""
+
+    def notification(self, *args):
+        NOTIFIED.append(args)
+
+
+xbmc = types.ModuleType('xbmc')
+xbmc.LOGDEBUG, xbmc.LOGINFO, xbmc.LOGWARNING, xbmc.LOGERROR = 0, 1, 2, 3
+xbmc.log = lambda msg, level=1: None
+xbmc.Monitor = _Monitor
+xbmc.Player = _Player
+xbmc.executebuiltin = lambda cmd: None
+xbmc.executeJSONRPC = lambda req: json.dumps({'result': {}})
+xbmc.getCondVisibility = lambda cond: True
+xbmc.sleep = lambda ms: None
+
+xbmcaddon = types.ModuleType('xbmcaddon')
+xbmcaddon.Addon = _Addon
+
+xbmcgui = types.ModuleType('xbmcgui')
+xbmcgui.Window = _Window
+xbmcgui.WindowXMLDialog = object
+xbmcgui.Dialog = _Dialog
+xbmcgui.NOTIFICATION_INFO = xbmcgui.NOTIFICATION_WARNING = xbmcgui.NOTIFICATION_ERROR = 'info'
+
+xbmcvfs = types.ModuleType('xbmcvfs')
+xbmcvfs.translatePath = lambda path: DATA_DIR + os.sep
+
+for name, module in (('xbmc', xbmc), ('xbmcaddon', xbmcaddon), ('xbmcgui', xbmcgui), ('xbmcvfs', xbmcvfs)):
+    sys.modules[name] = module
+sys.path.insert(0, ADDON_DIR)
+
+from resources.lib import prompt  # noqa: E402
+from resources.lib import scheduler  # noqa: E402
+from resources.lib import slots as store  # noqa: E402
+
+# --- Helpers ------------------------------------------------------------------
+
+FAILURES = []
+
+
+def check(condition, message):
+    """
+    <summary>Record a failure when the condition is false; the run carries on.</summary>
+    <param name="condition">What must hold.</param>
+    <param name="message">What to report when it does not.</param>
+    """
+    if not condition:
+        FAILURES.append(message)
+        print('FAIL: {}'.format(message))
+
+
+def equal(actual, expected, what):
+    """<summary>check() for an equality, printing both sides on failure.</summary>"""
+    check(actual == expected, '{}: got {!r}, expected {!r}'.format(what, actual, expected))
+
+
+class _FixedDatetime(datetime):
+    """<summary>datetime whose now() is pinned, so the scheduler's clock is the test's.</summary>"""
+    fixed = None
+
+    @classmethod
+    def now(cls, tz=None):
+        """<summary>The pinned time, whatever tz is asked for.</summary>"""
+        return cls.fixed
+
+
+def at(when):
+    """<summary>Pin the scheduler's clock to when.</summary>"""
+    _FixedDatetime.fixed = when
+    scheduler.datetime = _FixedDatetime
+
+
+def save_slot(**fields):
+    """<summary>Store one enabled favourite slot with the given fields and return it.</summary>"""
+    data = store.new_slot(favourite='Some Show', day='Wednesday')
+    data.update({'id': 1, 'label': 'Show'})
+    data.update(fields)
+    store.save_slots([data])
+    return data
+
+
+def make_scheduler(answers):
+    """
+    <summary>
+    An EngageScheduler whose banner is a recorder answering from a list of
+    (action, snooze minutes), and whose playback is recorded in sched.played.
+    </summary>
+    <param name="answers">The answers the banner gives, in order; the last one repeats.</param>
+    """
+    sched = scheduler.EngageScheduler()
+    sched._gui_ready = True
+    sched.banners = []
+    sched.played = []
+    answers = list(answers)
+
+    def handle_warning(slot, scheduled_dt, key=None):
+        """<summary>Record the banner and answer with the next scripted action.</summary>"""
+        sched.banners.append((key, scheduled_dt))
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    def play_slot(slot, key=None):
+        """<summary>Record the play and mark the player as playing.</summary>"""
+        sched.played.append(key)
+        PLAYING[0] = True
+
+    sched._handle_warning = handle_warning
+    sched._play_slot = play_slot
+    return sched
+
+
+# --- Tests --------------------------------------------------------------------
+
+def test_autoopen_no_banner_no_double_play():
+    """<summary>An autoopen slot gets no banner in its warning window and plays exactly once.</summary>"""
+    save_slot(autoopen=True, warning=5, hour=19, minute=0)
+    sched = make_scheduler([('queue', 5)])
+    PLAYING[0] = True
+    at(datetime(2026, 10, 14, 18, 57))  # a Wednesday, inside the warning window
+    sched._tick()
+    equal(sched.banners, [], 'no banner for an autoopen slot before its time')
+    equal(sched.queued_next, [], 'nothing queued either')
+    at(datetime(2026, 10, 14, 19, 0, 20))
+    sched._tick()
+    equal(sched.played, ['2026-10-14-1-1900'], 'played once at the set time')
+    sched._on_playback_ended()
+    equal(sched.played, ['2026-10-14-1-1900'], 'nothing more plays when the current item ends')
+
+    # A queue entry for the same occurrence (a banner timed out to Queue Next
+    # under an older build) is dropped rather than played a second time.
+    sched = make_scheduler([('queue', 5)])
+    slot = sched._reload_slots()[0]
+    sched.queued_next.append((slot, '2026-10-14-1-1900'))
+    at(datetime(2026, 10, 14, 19, 0, 20))
+    sched._tick()
+    equal(sched.played, ['2026-10-14-1-1900'], 'autoopen plays the slot')
+    equal(sched.queued_next, [], 'the stale queue entry is dropped')
+    sched._on_playback_ended()
+    equal(sched.played, ['2026-10-14-1-1900'], 'and so it does not play again')
+    PLAYING[0] = False
+
+
+def test_snooze_across_midnight():
+    """<summary>A snooze running past midnight comes back with a fresh countdown.</summary>"""
+    _Addon.settings['catchup_hours'] = 0
+    save_slot(warning=5, hour=23, minute=30)
+    sched = make_scheduler([('snooze', 60), ('cancel', 5)])
+    at(datetime(2026, 10, 14, 23, 26))
+    sched._tick()
+    key = '2026-10-14-1-2330'
+    equal(sched.snoozed.get(key), datetime(2026, 10, 15, 0, 26), 'snoozed for an hour')
+    at(datetime(2026, 10, 15, 0, 0, 30))
+    sched._tick()
+    check(key in sched.snoozed, 'the snooze survives the first tick after midnight')
+    equal(len(sched.banners), 1, 'and no banner yet')
+    at(datetime(2026, 10, 15, 0, 27))
+    sched._tick()
+    equal(len(sched.banners), 2, 'the banner comes back once the snooze runs out')
+    equal(sched.banners[1], (key, datetime(2026, 10, 15, 0, 27) + timedelta(seconds=scheduler.LATE_BANNER_SECONDS)),
+          'with a short countdown from now, under yesterday\'s key')
+    check(key not in sched.snoozed, 'the snooze is spent')
+    check(key not in sched.cancelled, 'the answer is let go with its day, since the occurrence cannot come back')
+    at(datetime(2026, 10, 15, 0, 28))
+    sched._tick()
+    equal(len(sched.banners), 2, 'no third banner')
+    _Addon.settings['catchup_hours'] = 6
+
+
+def test_catchup_across_midnight():
+    """<summary>A slot missed late in the evening is caught up after midnight, once.</summary>"""
+    _Addon.settings['catchup_hours'] = 6
+    save_slot(warning=5, hour=22, minute=0)
+    sched = make_scheduler([('cancel', 5)])
+    key = '2026-10-14-1-2200'
+    at(datetime(2026, 10, 15, 0, 30))  # Thursday, 2.5 hours after a Wednesday 22:00 slot
+    sched._tick()
+    equal(sched.banners, [(key, datetime(2026, 10, 14, 22, 0))], 'catch-up banner for yesterday\'s occurrence')
+    equal(store.get_catchup_count(key), 1, 'the catch-up count is kept under yesterday\'s key')
+    at(datetime(2026, 10, 15, 0, 31))
+    sched._tick()
+    equal(len(sched.banners), 1, 'answered once, not shown again a minute later')
+    check(key in sched.cancelled, 'the answer survives the purge while the window is open')
+    at(datetime(2026, 10, 15, 6, 1))  # past midnight plus the six hour window
+    sched._tick()
+    check(key not in sched.cancelled, 'the key is purged once the window has closed')
+    equal(len(sched.banners), 1, 'and the occurrence is not offered again')
+
+    # The Coming up publisher agrees: at 00:30 yesterday's overdue slot is next.
+    sched = make_scheduler([('cancel', 5)])
+    at(datetime(2026, 10, 15, 0, 30))
+    slot = sched._reload_slots()[0]
+    due, found_key = sched._next_occurrence(slot, datetime(2026, 10, 15, 0, 30))
+    equal((due, found_key), (datetime(2026, 10, 14, 22, 0), key), 'the publisher offers yesterday\'s occurrence')
+    equal(scheduler.when_label(due, datetime(2026, 10, 15, 0, 30)), 'Yesterday 22:00', 'and words it as yesterday')
+    _Addon.settings['catchup_hours'] = 0
+    sched = make_scheduler([('cancel', 5)])
+    at(datetime(2026, 10, 15, 0, 30))
+    sched._tick()
+    equal(sched.banners, [], 'with the window off there is no catch-up')
+    _Addon.settings['catchup_hours'] = 6
+
+
+def test_stop_and_requeue_keeps_queue():
+    """<summary>The stop Engage issues for Stop and Resume After does not fire the queue.</summary>"""
+    sched = make_scheduler([('cancel', 5)])
+    slot_a = scheduler.Slot(dict(store.new_slot(favourite='A'), id=1, label='A'))
+    slot_b = scheduler.Slot(dict(store.new_slot(favourite='B'), id=2, label='B'))
+    sched.queued_next.append((slot_a, 'kA'))
+    sched._capture_now_playing = lambda: {'time': 10, 'file': '/f.mkv', 'describe': 'f'}
+    PLAYING[0] = True
+    _Player.on_stop = sched._on_playback_ended
+    try:
+        sched._stop_and_requeue(slot_b, 'kB')
+    finally:
+        _Player.on_stop = None
+    equal(sched.played, ['kB'], 'only the chosen slot plays now')
+    equal([k for _, k in sched.queued_next], ['kA'], 'the queued slot keeps its place')
+    equal(sched._stopping_on_purpose, False, 'the flag is lowered again')
+    sched._on_playback_ended()
+    equal(sched.played, ['kB', 'kA'], 'a real end of playback fires the queue as before')
+    PLAYING[0] = False
+
+
+def test_warning_zero_countdown():
+    """<summary>A warning 0 slot's banner counts down from now so its timeout action can fire.</summary>"""
+    save_slot(warning=0, hour=19, minute=0)
+    sched = make_scheduler([('cancel', 5)])
+    now = datetime(2026, 10, 14, 19, 0, 10)
+    at(now)
+    sched._tick()
+    equal(sched.banners, [('2026-10-14-1-1900', now + timedelta(seconds=scheduler.LATE_BANNER_SECONDS))],
+          'the banner is given a short countdown rather than one already at zero')
+    due = datetime(2026, 10, 14, 19, 0)
+    check(prompt.allow_autofire(due, due - timedelta(minutes=5)), 'autofire allowed ahead of time')
+    check(prompt.allow_autofire(due, due + timedelta(seconds=prompt.AUTOFIRE_GRACE_SECONDS - 1)),
+          'autofire allowed inside the grace')
+    check(not prompt.allow_autofire(due, due + timedelta(seconds=prompt.AUTOFIRE_GRACE_SECONDS + 1)),
+          'a catch-up banner beyond the grace waits for the user')
+
+
+def test_list_pick_kept_while_snoozed():
+    """<summary>A random list pick survives midnight while its occurrence is snoozed.</summary>"""
+    _Addon.settings['catchup_hours'] = 0  # so nothing from yesterday is kept by date alone
+    sched = make_scheduler([('cancel', 5)])
+    key = '2026-10-14-1-2330'
+    sched._list_picks[key] = {'label': 'Film'}
+    sched.snoozed[key] = datetime(2026, 10, 15, 0, 26)
+    sched.warned[key] = True
+    sched._purge_trackers(datetime(2026, 10, 15, 0, 0, 30))
+    check(key in sched._list_picks, 'the pick is kept while the snooze runs')
+    check(key in sched.snoozed, 'and so is the snooze')
+    check(key not in sched.warned, 'while yesterday\'s other state goes')
+    del sched.snoozed[key]
+    sched._purge_trackers(datetime(2026, 10, 15, 0, 1))
+    check(key not in sched._list_picks, 'and dropped once the snooze is gone and its day is over')
+    _Addon.settings['catchup_hours'] = 6
+
+
+def main():
+    """<summary>Run every test and exit non zero if any check failed.</summary>"""
+    for test in (test_autoopen_no_banner_no_double_play, test_snooze_across_midnight,
+                 test_catchup_across_midnight, test_stop_and_requeue_keeps_queue,
+                 test_warning_zero_countdown, test_list_pick_kept_while_snoozed):
+        print('running {}'.format(test.__name__))
+        try:
+            test()
+        finally:
+            scheduler.datetime = datetime
+    if FAILURES:
+        print('{} check(s) failed'.format(len(FAILURES)))
+        return 1
+    print('test_process_slot: all checks passed')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
