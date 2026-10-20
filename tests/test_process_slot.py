@@ -387,12 +387,14 @@ def test_banner_style_resolution():
     equal(store.parse_banner_style_setting('Thin'), 'thin', 'a style name is accepted too')
     equal(store.parse_banner_style_setting('2'), 'uberthin', 'enum index 2 is uber thin')
     equal(store.parse_banner_style_setting('3'), 'uberthin_nobuttons', 'enum index 3 is uber thin, no buttons')
+    equal(store.parse_banner_style_setting('4'), 'fullmonty', 'enum index 4 is the Full Monty')
     equal(store.parse_banner_style_setting('7'), 'standard', 'an index off the end is standard')
     equal(store.parse_banner_style_setting(None), 'standard', 'None is standard')
-    equal(store.BANNER_STYLE_SETTING_ORDER, ['standard', 'thin', 'uberthin', 'uberthin_nobuttons'],
+    equal(store.BANNER_STYLE_SETTING_ORDER, ['standard', 'thin', 'uberthin', 'uberthin_nobuttons',
+                                             'fullmonty'],
           'the enum order the settings.xml comment promises')
     with open(os.path.join(ADDON_DIR, 'resources', 'settings.xml'), encoding='utf-8') as f:
-        check('values="Standard|Thin|Uber thin|Uber thin, no buttons"' in f.read(),
+        check('values="Standard|Thin|Uber thin|Uber thin, no buttons|Full Monty"' in f.read(),
               'settings.xml lists the styles in BANNER_STYLE_SETTING_ORDER')
 
     # The slot's own choice.
@@ -432,6 +434,23 @@ def test_banner_style_resolution():
           'the buttonless uber thin has its own window')
     for style in store.BANNER_STYLES:
         check(style in prompt.BANNER_XML, '{} has a window'.format(style))
+    equal(prompt.banner_xml_for('fullmonty'), 'EngagePromptFullMonty.xml', 'the Full Monty has its own window')
+
+    # The Full Monty's lines, from what the library returns for each kind.
+    film = prompt.full_monty_details('movie', {
+        'plot': 'Spice.', 'year': 2021, 'runtime': 9300, 'genre': ['Science Fiction', 'Adventure', 'Drama', 'War'],
+        'rating': 8.04, 'mpaa': '12A', 'tagline': 'Beyond fear.', 'art': {'fanart': 'f.jpg', 'poster': 'p.jpg'}})
+    equal(film['infoline'], '2021 \u00b7 2h 35m \u00b7 Science Fiction, Adventure, Drama \u00b7 8.0 \u00b7 12A',
+          'film line: year, running time, three genres, rating, certificate')
+    equal((film['plot'], film['fanart'], film['tagline']), ('Spice.', 'f.jpg', 'Beyond fear.'), 'film extras')
+    episode = prompt.full_monty_details('episode', {
+        'plot': 'Neelix.', 'runtime': 2700, 'firstaired': '1997-01-08', 'rating': 0,
+        'art': {'tvshow.fanart': 'show.jpg'}})
+    equal(episode['infoline'], 'First aired 08/01/1997 \u00b7 45m', 'episode line: en-GB date, running time')
+    equal(episode['fanart'], 'show.jpg', "an episode takes its show's fanart")
+    equal(prompt.full_monty_details('movie', None),
+          {'plot': '', 'fanart': '', 'infoline': '', 'tagline': ''}, 'nothing known, nothing shown')
+    equal(prompt._runtime_text('x'), '', 'a nonsense running time is left out')
 
     # A buttonless banner keeps its layout while it can fire on its own, and
     # becomes the buttoned uber thin one for an overdue catch-up, which waits
@@ -468,10 +487,13 @@ def test_banner_style_resolution():
     # banner once the master changes, and a slot with its own choice does not.
     opened = []
 
+    given = []
+
     def fake_prompt(addon_path, show_name, episode_label, scheduled_dt, thumb='',
-                    timeout_action='queue', banner_style='standard'):
-        """<summary>Record the style the banner was asked to open with.</summary>"""
+                    timeout_action='queue', banner_style='standard', details=None):
+        """<summary>Record the style the banner was asked to open with, and its details.</summary>"""
         opened.append(banner_style)
+        given.append(details)
         return ('cancel', 5)
 
     real_prompt = prompt.show_engage_prompt
@@ -491,6 +513,17 @@ def test_banner_style_resolution():
         sched._handle_warning(own_choice, when)
         equal(opened, ['standard', 'thin', 'standard'],
               'the master applies at popup time and a slot\'s own choice wins')
+        equal(given, [None, None, None], 'no details are looked up for the other layouts')
+
+        # The Full Monty asks for the item's details, and only it does.
+        looked = []
+        sched._banner_details = lambda slot, key=None: looked.append(slot.id) or {'plot': 'P'}
+        monty = scheduler.Slot(dict(store.new_slot(favourite='C'), id=3, label='C',
+                                    banner_style='fullmonty'))
+        sched._handle_warning(monty, when)
+        sched._handle_warning(own_choice, when)
+        equal((opened[-2:], given[-2:], looked), (['fullmonty', 'standard'], [{'plot': 'P'}, None], [3]),
+              'the Full Monty gets its details; a standard banner straight after does not')
     finally:
         prompt.show_engage_prompt = real_prompt
         _Addon.settings.pop('banner_style', None)

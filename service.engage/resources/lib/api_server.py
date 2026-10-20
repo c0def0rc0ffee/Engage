@@ -271,6 +271,23 @@ def _validation(error):
     return ApiError(422, 'validation', error.message, error.field)
 
 
+# The orders JellyStat offers for the slot list (spec 5.1, sorts). Each sorts
+# on its fields in turn; an empty value goes last. Next to run puts switched
+# off slots after every live one, since they will not run at all. 'next_due' is a record key
+# outside the schema, see slot_rules.to_api.
+SLOT_SORTS = [
+    {'key': 'next', 'label': 'Next to run',
+     'by': [{'field': 'enabled', 'order': [True, False]},
+            {'field': 'next_due'}, {'field': 'title'}]},
+    {'key': 'kind', 'label': 'Lists, then sequences, then favourites',
+     'by': [{'field': 'kind', 'order': ['list', 'sequence', 'favourite']},
+            {'field': 'next_due'}, {'field': 'title'}]},
+    {'key': 'title', 'label': 'Name', 'by': [{'field': 'title'}]},
+    {'key': 'time', 'label': 'Time of day',
+     'by': [{'field': 'time'}, {'field': 'title'}]},
+]
+
+
 def info():
     """
     <summary>
@@ -283,7 +300,9 @@ def info():
         'name': 'Engage',
         'version': _addon_version(),
         'resources': [{'name': 'slots', 'label': 'Slots', 'label_one': 'Slot',
-                       'title_field': 'title'}],
+                       'title_field': 'title',
+                       'sorts': SLOT_SORTS,
+                       'inline': ['days', 'time']}],
         'backup': True,
         'restore': True,
     }

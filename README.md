@@ -61,12 +61,15 @@ Favourites and library.
   just work.
 - ⏱️ **Slim countdown banner**, slides down from the top with the show's
   **poster**, the show/episode, and a live countdown. Stays out of your way.
-  Four layouts: **standard**, with text buttons; **thin**, about half the
+  Five layouts: **standard**, with text buttons; **thin**, about half the
   height with icon buttons and a one line hint for the focused icon; **uber
   thin**, a single line of text with small icon buttons and no poster; and
   **uber thin, no buttons**, the same line with nothing to press, which just
   counts down to the slot's *When the countdown ends* action (Back still
-  cancels it, and a missed slot's catch up banner gets the buttons back).
+  cancels it, and a missed slot's catch up banner gets the buttons back);
+  and **Full Monty**, for movie night: the fanart fills the screen and a
+  centred panel shows the big poster, the year, running time, genres and
+  rating, the tagline and the synopsis, with the buttons underneath.
   Pick a default in the settings and override it per slot.
 - 🎬 **One-tap actions**:
   - **Start Now**, play immediately.
@@ -123,7 +126,7 @@ Configure**) and choose **Manage slots…**
 | **Catch-up window** | Hours after a missed slot it will still prompt you (0 = off) |
 | **Max missed-slot banners** | How many times an overdue banner reappears before giving up |
 | **Skip a slot watched in the last** | Hours after you played a slot's show (or a sequence item) that it stays quiet, 0 = off |
-| **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons) or Uber thin, no buttons (one line that counts down to the slot's countdown action). Every slot whose own **Banner style** is left on Default follows this, from the next banner on |
+| **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons) Uber thin, no buttons (one line that counts down to the slot's countdown action) or Full Monty (centre screen with the picture and synopsis). Every slot whose own **Banner style** is left on Default follows this, from the next banner on |
 | **Show all favourites in pickers** | Off = only video/TV favourites are listed |
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
 | **Test mode** | Fire all enabled slots immediately (handy for testing) |
@@ -193,7 +196,7 @@ service.engage/
    │  ├─ slot_rules.py    slot validation and the API shape of a slot
    │  ├─ api_server.py    loopback API the JellyStat dashboard manages slots through
    │  └─ favourites_ui.py favourites picker / add / remove
-   └─ skins/Default/      banner skins (standard, thin, uber thin) + textures and icons
+   └─ skins/Default/      banner skins (standard, thin, uber thin, Full Monty) + textures and icons
 ```
 
 ## Licence

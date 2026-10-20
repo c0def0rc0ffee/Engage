@@ -26,7 +26,7 @@ wording from slot_manager.
 
 import copy
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from resources.lib import functional_lists
 from resources.lib import slots as store
@@ -70,7 +70,10 @@ REPEAT_LABELS = {
 }
 
 # Sent on reads, ignored on writes.
-READ_ONLY = ('id', 'title', 'summary')
+READ_ONLY = ('id', 'title', 'summary', 'next', 'next_due')
+
+# How far ahead next_due looks: past a yearly slot's next date wherever today falls.
+NEXT_DUE_DAYS = 400
 
 _TIME = re.compile(r'^(\d{1,2}):(\d{2})$')
 _ISO_DATE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})$')
@@ -264,20 +267,80 @@ def summary_of(slot):
     return '{} at {}'.format(slot_manager._schedule_text(slot), _readable(slot)['time'])
 
 
-def to_api(slot):
+def next_due(slot, now):
+    """
+    <summary>
+    When a slot next runs, from now on.
+    </summary>
+    <param name="slot">A stored slot dict.</param>
+    <param name="now">The current time.</param>
+    <returns>The datetime of the first occurrence at or after the current minute
+    within NEXT_DUE_DAYS, or None when there is none (a one shot date already
+    gone, say).</returns>
+    <remarks>
+    Uses the scheduler's own Slot.runs_on, so the dashboard's order is the
+    scheduler's calendar. It does not know what the scheduler has already done
+    today: a slot played or cancelled earlier this evening still reads as due at
+    its time while that time is ahead. For sorting a list that is close enough,
+    and it needs no access to the running service. Imported here, not at the
+    top, because the scheduler pulls in the Kodi player modules.
+    </remarks>
+    """
+    from resources.lib.scheduler import Slot
+    wrapped = Slot(slot)
+    floor = now.replace(second=0, microsecond=0)
+    for offset in range(NEXT_DUE_DAYS):
+        day = floor.date() + timedelta(days=offset)
+        if not wrapped.runs_on(day):
+            continue
+        due = datetime(day.year, day.month, day.day, wrapped.hour, wrapped.minute)
+        if due >= floor:
+            return due
+    return None
+
+
+def next_text(due, now):
+    """
+    <summary>
+    The list line for a slot's next occurrence, in the skin's Coming up words.
+    </summary>
+    <param name="due">What next_due returned.</param>
+    <param name="now">The current time.</param>
+    <returns>'Next: Tonight 20:00' and the like, or 'Not due in the next year'.</returns>
+    """
+    if due is None:
+        return 'Not due in the next year'
+    from resources.lib.scheduler import when_label
+    return 'Next: {}'.format(when_label(due, now))
+
+
+def to_api(slot, now=None):
     """
     <summary>
     A stored slot in its API shape.
     </summary>
     <param name="slot">A stored slot dict.</param>
-    <returns>A new dict: 'id', the visible fields, then 'title' and 'summary'.</returns>
+    <param name="now">The current time, for the next occurrence; datetime.now()
+    when None.</param>
+    <returns>A new dict: 'id', the visible fields, then 'title', 'summary',
+    'next' and 'next_due'.</returns>
+    <remarks>
+    'next' is the readable next occurrence the list shows under the title.
+    'next_due' is the same moment as 'YYYY-MM-DDTHH:MM', empty when there is
+    none: a sort key for the "Next to run" order /info declares, not in the
+    schema, so JellyStat never shows or sends it (spec 5.1).
+    </remarks>
     """
+    now = now or datetime.now()
     values = _readable(slot)
     record = {'id': slot.get('id', 0)}
     for key in visible_fields(values):
         record[key] = copy.deepcopy(values[key])
     record['title'] = title_of(slot)
     record['summary'] = summary_of(slot)
+    due = next_due(slot, now)
+    record['next'] = next_text(due, now)
+    record['next_due'] = due.strftime('%Y-%m-%dT%H:%M') if due else ''
     return record
 
 
@@ -659,6 +722,7 @@ def schema():
             'fields': [
                 {'key': 'title', 'label': 'Slot', 'type': 'readonly'},
                 {'key': 'summary', 'label': 'When', 'type': 'readonly'},
+                {'key': 'next', 'label': 'Next', 'type': 'readonly'},
                 {'key': 'enabled', 'label': 'Enabled', 'type': 'boolean', 'default': True},
                 {'key': 'kind', 'label': 'What it plays', 'type': 'choice', 'required': True,
                  'default': 'favourite', 'options': _options(KINDS, KIND_LABELS)},

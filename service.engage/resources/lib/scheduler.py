@@ -1725,13 +1725,103 @@ class EngageScheduler:
             'Engage', notif_msg, xbmcgui.NOTIFICATION_INFO, 4000
         )
 
+        # Only the Full Monty shows the synopsis and the rest, so only it pays
+        # for the extra library lookup.
+        details = None
+        if banner_style == slot_store.BANNER_FULLMONTY:
+            details = self._banner_details(slot, key)
+
         action, snooze_minutes = show_engage_prompt(
             addon_path, slot.label, episode_label, scheduled_dt, thumb,
-            slot.timeout_action, banner_style
+            slot.timeout_action, banner_style, details
         )
         self._log('Prompt for slot {} ({} banner) returned action={}, snooze={}m'.format(
             slot.index + 1, banner_style, action, snooze_minutes))
         return action, snooze_minutes
+
+    # What each kind of library item is asked for on the Full Monty banner.
+    FULL_MONTY_QUERIES = {
+        'movie': ('VideoLibrary.GetMovieDetails', 'movieid', 'moviedetails',
+                  ['plot', 'art', 'year', 'runtime', 'genre', 'rating', 'mpaa', 'tagline']),
+        'episode': ('VideoLibrary.GetEpisodeDetails', 'episodeid', 'episodedetails',
+                    ['plot', 'art', 'runtime', 'rating', 'firstaired']),
+        'tvshow': ('VideoLibrary.GetTVShowDetails', 'tvshowid', 'tvshowdetails',
+                   ['plot', 'art', 'year', 'genre', 'rating', 'mpaa']),
+    }
+
+    def _banner_item_ref(self, slot, key=None):
+        """
+        <summary>
+        The library item a slot's banner is about, as (kind, id).
+        </summary>
+        <param name="slot">The slot that is due.</param>
+        <param name="key">The occurrence key, so a random list slot names the item
+        its banner already picked.</param>
+        <returns>('movie', id), ('episode', id) or ('tvshow', id), or None for a
+        favourite that is not a library movie or show, an item played by its file
+        path, or a finished sequence.</returns>
+        <remarks>
+        The same resolvers _describe_slot uses, in the same order, so the details
+        are those of the item the banner names. A TV favourite with every episode
+        watched falls back to the show itself.
+        </remarks>
+        """
+        if slot.kind == 'list':
+            nxt = self._resolve_list_item(slot, key)
+            spec = (nxt or {}).get('spec') or {}
+            if spec.get('movieid'):
+                return ('movie', spec['movieid'])
+            if spec.get('episodeid'):
+                return ('episode', spec['episodeid'])
+            return None
+        if slot.kind == 'sequence':
+            nxt = self._resolve_next_item(slot)
+            return (nxt['type'], nxt['id']) if nxt else None
+        favs = self._get_favourites_raw()
+        fav = next((f for f in favs if f.get('title', '').lower() == slot.favourite.lower()), None)
+        if not fav:
+            return None
+        tvshowid = self._extract_tvshowid(fav)
+        if tvshowid is not None:
+            episode = self._get_next_unwatched(tvshowid)
+            if episode and episode.get('episodeid'):
+                return ('episode', episode['episodeid'])
+            return ('tvshow', tvshowid)
+        movieid = self._extract_movieid(fav)
+        return ('movie', movieid) if movieid is not None else None
+
+    def _banner_details(self, slot, key=None):
+        """
+        <summary>
+        The Full Monty's synopsis, fanart, information line and tagline for a slot.
+        </summary>
+        <param name="slot">The slot that is due.</param>
+        <param name="key">The occurrence key, passed to _banner_item_ref.</param>
+        <returns>What prompt.full_monty_details returns, or an empty dict when the
+        item is not in the library or the lookup fails.</returns>
+        <remarks>
+        One or two JSON-RPC calls, made only when the Full Monty is the banner
+        being shown. Any failure is logged and gives an empty dict, so the banner
+        still opens with its title, poster and buttons.
+        </remarks>
+        """
+        from resources.lib.prompt import full_monty_details
+        try:
+            ref = self._banner_item_ref(slot, key)
+            if not ref:
+                return {}
+            kind, item_id = ref
+            method, id_key, result_key, properties = self.FULL_MONTY_QUERIES[kind]
+            response = json.loads(xbmc.executeJSONRPC(json.dumps({
+                'jsonrpc': '2.0', 'method': method,
+                'params': {id_key: item_id, 'properties': properties}, 'id': 1
+            })))
+            details = response.get('result', {}).get(result_key)
+            return full_monty_details(kind, details) if details else {}
+        except Exception as e:
+            self._log('Full Monty details for slot {} failed: {}'.format(slot.index + 1, e),
+                      xbmc.LOGWARNING)
+            return {}
 
     def _describe_slot(self, slot, key=None):
         """

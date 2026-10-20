@@ -10,11 +10,14 @@ When the countdown reaches 0 with no user input, the banner resolves to the
 slot's own timeout action (Queue Next by default, see slots.py). The user can
 press any button before then to decide it themselves.
 
-Four layouts share this class and its window properties: the standard banner
-(EngagePrompt.xml), the thin one (EngagePromptThin.xml), and the two single
-line uber thin ones (EngagePromptUberThin.xml with icon buttons,
-EngagePromptUberThinNoButtons.xml with none), chosen per banner by the
-banner_style argument of show_engage_prompt. The scheduler resolves the style
+Five layouts share this class and its window properties: the standard banner
+(EngagePrompt.xml), the thin one (EngagePromptThin.xml), the two single line
+uber thin ones (EngagePromptUberThin.xml with icon buttons,
+EngagePromptUberThinNoButtons.xml with none), and the Full Monty
+(EngagePromptFullMonty.xml), centre screen for movie night, chosen per banner
+by the banner_style argument of show_engage_prompt. The Full Monty alone also
+reads the plot, fanart, infoline and tagline properties, from the details
+argument (see full_monty_details). The scheduler resolves the style
 from the slot and the master setting (slots.resolve_banner_style).
 
 The buttonless layout has nothing to press, so it only makes sense when the
@@ -53,7 +56,11 @@ BANNER_XML = {
     'thin': 'EngagePromptThin.xml',
     'uberthin': 'EngagePromptUberThin.xml',
     'uberthin_nobuttons': 'EngagePromptUberThinNoButtons.xml',
+    'fullmonty': 'EngagePromptFullMonty.xml',
 }
+
+# The window properties only the Full Monty reads, and full_monty_details' keys.
+DETAIL_PROPERTIES = ('plot', 'fanart', 'infoline', 'tagline')
 DEFAULT_BANNER_XML = BANNER_XML['standard']
 
 # Layouts with no buttons, and the layout each one becomes when the banner
@@ -134,6 +141,8 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
             self.snooze_minutes = 5
         if not hasattr(self, 'timeout_action'):
             self.timeout_action = 'queue'
+        if not hasattr(self, 'details'):
+            self.details = {}
 
         self._stop_timer = False
         self._user_decided = False
@@ -147,6 +156,12 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
         # Poster/thumbnail; fall back to a generic video icon so the layout
         # never has an empty hole.
         self.setProperty('thumb', self.thumb or 'DefaultVideo.png')
+        # The Full Monty's extras. Set on every layout, read only by that one;
+        # the fanart falls back to the poster so its background is never bare.
+        for name in DETAIL_PROPERTIES:
+            self.setProperty(name, str(self.details.get(name) or ''))
+        if not self.details.get('fanart'):
+            self.setProperty('fanart', self.thumb or '')
         # Drives visibility of the playback-only buttons (Queue Next and
         # Stop & Resume After), they only make sense if something is playing.
         self._playing = xbmc.Player().isPlaying()
@@ -290,6 +305,76 @@ def countdown_text(total_seconds, timeout_action, playing):
     return 'Overdue by {}s'.format(o_sec)
 
 
+def _runtime_text(seconds):
+    """
+    <summary>
+    A running time in seconds as '2h 15m' or '45m'.
+    </summary>
+    <param name="seconds">Kodi's runtime, in seconds.</param>
+    <returns>The text, or '' for nothing or nonsense.</returns>
+    """
+    try:
+        minutes = int(round(float(seconds) / 60))
+    except (TypeError, ValueError):
+        return ''
+    if minutes <= 0:
+        return ''
+    hours, minutes = divmod(minutes, 60)
+    return '{}h {:02d}m'.format(hours, minutes) if hours else '{}m'.format(minutes)
+
+
+def full_monty_details(kind, details):
+    """
+    <summary>
+    The Full Monty's extra lines from one library item's details.
+    </summary>
+    <param name="kind">'movie', 'episode' or 'tvshow'.</param>
+    <param name="details">What VideoLibrary.Get*Details returned for it, with
+    plot, art, year, runtime, genre, rating, mpaa, tagline, firstaired and
+    premiered as each kind has them.</param>
+    <returns>{'plot', 'fanart', 'infoline', 'tagline'}, each '' when the
+    library has nothing.</returns>
+    <remarks>
+    The information line joins what there is with middle dots: year (or the
+    first aired date of an episode, en-GB), running time, up to three genres,
+    the rating to one decimal and the certificate. An episode takes its show's
+    fanart when it has none of its own.
+    </remarks>
+    """
+    details = details or {}
+    art = details.get('art') or {}
+    fanart = art.get('fanart') or art.get('tvshow.fanart') or ''
+    parts = []
+    if kind == 'episode':
+        aired = str(details.get('firstaired') or '')
+        if len(aired) == 10 and aired[4] == '-' and aired[7] == '-':
+            parts.append('First aired {}/{}/{}'.format(aired[8:10], aired[5:7], aired[0:4]))
+    elif details.get('year'):
+        parts.append(str(details['year']))
+    runtime = _runtime_text(details.get('runtime'))
+    if runtime:
+        parts.append(runtime)
+    genres = details.get('genre') or []
+    if isinstance(genres, str):
+        genres = [genres]
+    if genres:
+        parts.append(', '.join(genres[:3]))
+    try:
+        rating = float(details.get('rating') or 0)
+    except (TypeError, ValueError):
+        rating = 0
+    if rating > 0:
+        parts.append('{:.1f}'.format(rating))
+    if details.get('mpaa'):
+        parts.append(str(details['mpaa']))
+    return {
+        'plot': str(details.get('plot') or ''),
+        'fanart': fanart,
+        'infoline': ' \u00b7 '.join(parts),
+        'tagline': str(details.get('tagline') or ''),
+    }
+
+
 def opening_style(banner_style, scheduled_dt, now):
     """
     <summary>
@@ -326,7 +411,8 @@ def banner_xml_for(banner_style):
 
 
 def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
-                       thumb='', timeout_action='queue', banner_style='standard'):
+                       thumb='', timeout_action='queue', banner_style='standard',
+                       details=None):
     """
     <summary>
     Show the banner prompt and return (choice, snooze_minutes).
@@ -339,6 +425,8 @@ def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
     banner_style picks the layout (see banner_xml_for); it is the resolved
     style, never a slot's 'default'. A buttonless style on an overdue
     catch-up banner is swapped for its buttoned twin (see opening_style).
+    details is the Full Monty's extras as full_monty_details returns them, or
+    None; the other layouts ignore it.
     </remarks>
     """
     style = opening_style(banner_style, scheduled_dt, datetime.now())
@@ -354,6 +442,7 @@ def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
         dlg.choice = 'cancel'
         dlg.snooze_minutes = 5
         dlg.timeout_action = timeout_action
+        dlg.details = details or {}
         dlg.doModal()
         result = (dlg.choice, dlg.snooze_minutes)
         del dlg
