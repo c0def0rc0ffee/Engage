@@ -450,6 +450,16 @@ def test_banner_style_resolution():
                            'EngagePromptUberThinNoButtons.xml'), encoding='utf-8') as f:
         check('type="button"' not in f.read(), 'the buttonless window has no buttons')
 
+    # The countdown says queuing only when the countdown will queue behind
+    # something playing; with nothing playing a queued slot starts at once.
+    equal(prompt.countdown_text(297, 'queue', True), 'Queuing in 4m 57s', 'queue while playing says queuing')
+    equal(prompt.countdown_text(5, 'queue', True), 'Queuing in 5s', 'queue under a minute')
+    equal(prompt.countdown_text(0, 'queue', True), 'Queuing now', 'queue at zero')
+    equal(prompt.countdown_text(297, 'queue', False), 'Starts in 4m 57s', 'queue with nothing playing starts')
+    equal(prompt.countdown_text(297, 'open', True), 'Starts in 4m 57s', 'start now says starts')
+    equal(prompt.countdown_text(0, 'open', False), 'Starting now', 'start now at zero')
+    equal(prompt.countdown_text(-122, 'queue', True), 'Overdue by 2m 02s', 'overdue reads the same for every action')
+
     for name in prompt.BANNER_XML.values():
         check(os.path.isfile(os.path.join(ADDON_DIR, 'resources', 'skins', 'Default', '720p', name)),
               '{} exists'.format(name))

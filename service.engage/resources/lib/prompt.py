@@ -149,7 +149,8 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
         self.setProperty('thumb', self.thumb or 'DefaultVideo.png')
         # Drives visibility of the playback-only buttons (Queue Next and
         # Stop & Resume After), they only make sense if something is playing.
-        self.setProperty('canresume', '1' if xbmc.Player().isPlaying() else '0')
+        self._playing = xbmc.Player().isPlaying()
+        self.setProperty('canresume', '1' if self._playing else '0')
         self._update_countdown()
 
         self._timer_thread = threading.Thread(target=self._tick, daemon=True)
@@ -190,28 +191,13 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
     def _update_countdown(self):
         """
         <summary>
-        Set the countdown window property to a 'Starts in', 'Starting now' or 'Overdue by'
-        string measured from scheduled_dt.
+        Set the countdown window property from scheduled_dt, worded by countdown_text.
         </summary>
         """
         remaining = self.scheduled_dt - datetime.now()
-        total_seconds = int(remaining.total_seconds())
-        if total_seconds > 0:
-            minutes, seconds = divmod(total_seconds, 60)
-            if minutes > 0:
-                text = 'Starts in {}m {:02d}s'.format(minutes, seconds)
-            else:
-                text = 'Starts in {}s'.format(seconds)
-        elif total_seconds == 0:
-            text = 'Starting now'
-        else:
-            overdue = abs(total_seconds)
-            o_min, o_sec = divmod(overdue, 60)
-            if o_min > 0:
-                text = 'Overdue by {}m {:02d}s'.format(o_min, o_sec)
-            else:
-                text = 'Overdue by {}s'.format(o_sec)
-        self.setProperty('countdown', text)
+        self.setProperty('countdown', countdown_text(
+            int(remaining.total_seconds()), self.timeout_action,
+            getattr(self, '_playing', False)))
 
     def onClick(self, controlId):
         """
@@ -270,6 +256,38 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
             self.choice = 'cancel'
             self._stop_timer = True
             self.close()
+
+
+def countdown_text(total_seconds, timeout_action, playing):
+    """
+    <summary>
+    The countdown line: 'Starts in', 'Starting now' or 'Overdue by', or
+    'Queuing in' and 'Queuing now' when the countdown will queue the slot.
+    </summary>
+    <param name="total_seconds">Whole seconds until the slot is due; negative
+    once it is overdue.</param>
+    <param name="timeout_action">What the countdown resolves to at zero.</param>
+    <param name="playing">Whether something was playing as the banner opened.</param>
+    <returns>The text for the countdown window property.</returns>
+    <remarks>
+    Queue only waits for the current item when something is playing; with
+    nothing playing the scheduler starts a queued slot straight away, so the
+    banner says 'Starts in' then, as it does for every other action.
+    </remarks>
+    """
+    queuing = timeout_action == 'queue' and playing
+    verb = 'Queuing' if queuing else 'Starts'
+    if total_seconds > 0:
+        minutes, seconds = divmod(total_seconds, 60)
+        if minutes > 0:
+            return '{} in {}m {:02d}s'.format(verb, minutes, seconds)
+        return '{} in {}s'.format(verb, seconds)
+    if total_seconds == 0:
+        return 'Queuing now' if queuing else 'Starting now'
+    o_min, o_sec = divmod(abs(total_seconds), 60)
+    if o_min > 0:
+        return 'Overdue by {}m {:02d}s'.format(o_min, o_sec)
+    return 'Overdue by {}s'.format(o_sec)
 
 
 def opening_style(banner_style, scheduled_dt, now):
