@@ -186,6 +186,7 @@ def _readable(slot):
                                        _int_or(slot.get('minute', 0), 0)),
         'warning': _int_or(slot.get('warning', 5), 5),
         'timeout_action': store.timeout_action_of(slot),
+        'banner_style': store.banner_style_of(slot),
         'autoopen': bool(slot.get('autoopen', False)),
         'snooze': bool(slot.get('snooze', True)),
     }
@@ -225,7 +226,7 @@ def visible_fields(values):
         keys.append('month_day')
     else:
         keys += ['month', 'month_day']
-    keys += ['date', 'time', 'warning', 'timeout_action', 'autoopen', 'snooze']
+    keys += ['date', 'time', 'warning', 'timeout_action', 'banner_style', 'autoopen', 'snooze']
     return keys
 
 
@@ -536,6 +537,7 @@ _CHECKS = {
     'warning': _int_checker('warning', 'Warning minutes', 0, WARNING_MAX),
     'timeout_action': _choice_checker('timeout_action', 'When the countdown ends',
                                       store.TIMEOUT_ACTIONS),
+    'banner_style': _choice_checker('banner_style', 'Banner style', store.SLOT_BANNER_STYLES),
     'autoopen': _bool_checker('autoopen', 'Skip the banner'),
     'snooze': _bool_checker('snooze', 'Allow snooze'),
 }
@@ -713,6 +715,10 @@ def schema():
                 {'key': 'timeout_action', 'label': 'When the countdown ends', 'type': 'choice',
                  'default': store.DEFAULT_TIMEOUT_ACTION,
                  'options': _options(store.TIMEOUT_ACTIONS, store.TIMEOUT_ACTION_LABELS)},
+                {'key': 'banner_style', 'label': 'Banner style', 'type': 'choice',
+                 'default': store.DEFAULT_SLOT_BANNER_STYLE,
+                 'options': _options(store.SLOT_BANNER_STYLES, store.BANNER_STYLE_LABELS),
+                 'help': 'Default follows the Default banner style in the add-on settings.'},
                 {'key': 'autoopen', 'label': 'Skip the banner, just play at the set time',
                  'type': 'boolean', 'default': False},
                 {'key': 'snooze', 'label': 'Allow snooze', 'type': 'boolean', 'default': True},

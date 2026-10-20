@@ -57,6 +57,41 @@ TIMEOUT_ACTION_SHORT = {
 }
 
 
+# How the banner is laid out when a slot's prompt pops up. 'standard' is the
+# original 100px strip with text buttons; 'thin' is the slim strip with icon
+# buttons and the poster hanging below it, the same size as before. A slot may
+# say 'default' to follow the master setting (settings.xml, banner_style),
+# which is resolved at popup time so changing the master changes every such
+# slot without rewriting slots.json.
+BANNER_STANDARD = 'standard'
+BANNER_THIN = 'thin'
+BANNER_DEFAULT = 'default'
+# What the master falls back to when its setting is missing or unreadable, so
+# an install that has never seen the setting keeps the original banner.
+DEFAULT_BANNER_STYLE = BANNER_STANDARD
+# What a slot without the key does: follow the master.
+DEFAULT_SLOT_BANNER_STYLE = BANNER_DEFAULT
+# Order here is the order the pickers show them in. The master offers the two
+# real layouts; a slot offers those plus 'default'.
+BANNER_STYLES = [BANNER_STANDARD, BANNER_THIN]
+SLOT_BANNER_STYLES = [BANNER_DEFAULT, BANNER_STANDARD, BANNER_THIN]
+BANNER_STYLE_LABELS = {
+    BANNER_DEFAULT: 'Use the default banner style',
+    BANNER_STANDARD: 'Standard, the full height banner with text buttons',
+    BANNER_THIN: 'Thin, a slim banner with icon buttons',
+}
+# Short form for the slot list and the edit menu.
+BANNER_STYLE_SHORT = {
+    BANNER_DEFAULT: 'Default',
+    BANNER_STANDARD: 'Standard',
+    BANNER_THIN: 'Thin',
+}
+# The settings.xml enum stores the index of its values list ("0" or "1"), in
+# this order. Kept beside the enum's values attribute so the two cannot drift
+# without a reader noticing.
+BANNER_STYLE_SETTING_ORDER = [BANNER_STANDARD, BANNER_THIN]
+
+
 # How a slot repeats. Weekly uses the 'days' list; every few weeks uses 'days',
 # 'week_interval' and 'week_start'; monthly uses 'month_day'; yearly uses
 # 'month' and 'month_day'. A one-shot 'date' overrides them all.
@@ -219,6 +254,94 @@ def timeout_action_of(slot):
     """
     action = (slot.get('timeout_action') or '').strip()
     return action if action in TIMEOUT_ACTIONS else DEFAULT_TIMEOUT_ACTION
+
+
+def banner_style_of(slot):
+    """
+    <summary>
+    The banner style this slot asks for: 'standard', 'thin' or 'default'.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>One of SLOT_BANNER_STYLES; 'default' when the key is missing or
+    holds something unknown.</returns>
+    <remarks>
+    This is the slot's own choice, not the layout that will be used; see
+    resolve_banner_style for that. Slots saved before this setting existed carry
+    no key and follow the master.
+    </remarks>
+    """
+    style = (slot.get('banner_style') or '').strip().lower()
+    return style if style in SLOT_BANNER_STYLES else DEFAULT_SLOT_BANNER_STYLE
+
+
+def parse_banner_style_setting(raw):
+    """
+    <summary>
+    Turn the master setting's stored value into a banner style.
+    </summary>
+    <param name="raw">What getSetting('banner_style') returned.</param>
+    <returns>One of BANNER_STYLES; DEFAULT_BANNER_STYLE for anything unreadable.</returns>
+    <remarks>
+    Kodi stores an enum setting as the index of the chosen entry, as a string,
+    so "0" and "1" are mapped through BANNER_STYLE_SETTING_ORDER. The style
+    names themselves are accepted too, in any case, so a backup written by hand
+    or a future select type setting reads the same way. Empty, which is what an
+    install upgraded from before the setting existed reports until it is first
+    opened, gives the default.
+    </remarks>
+    """
+    text = (raw if isinstance(raw, str) else str(raw or '')).strip().lower()
+    if text in BANNER_STYLES:
+        return text
+    try:
+        index = int(text)
+    except ValueError:
+        return DEFAULT_BANNER_STYLE
+    if 0 <= index < len(BANNER_STYLE_SETTING_ORDER):
+        return BANNER_STYLE_SETTING_ORDER[index]
+    return DEFAULT_BANNER_STYLE
+
+
+def master_banner_style():
+    """
+    <summary>
+    The master banner style from the add-on settings, read fresh each call.
+    </summary>
+    <returns>One of BANNER_STYLES; DEFAULT_BANNER_STYLE when the setting cannot be read.</returns>
+    <remarks>
+    Read at popup time rather than cached, so a change in the settings dialog
+    applies to the next banner without a restart.
+    </remarks>
+    """
+    try:
+        import xbmcaddon
+        return parse_banner_style_setting(xbmcaddon.Addon(ADDON_ID).getSetting('banner_style'))
+    except Exception as e:
+        _log('could not read banner_style setting, using {}: {}'.format(DEFAULT_BANNER_STYLE, e),
+             xbmc.LOGWARNING)
+        return DEFAULT_BANNER_STYLE
+
+
+def resolve_banner_style(slot_style, master_style):
+    """
+    <summary>
+    The layout a banner actually uses: the slot's own choice when it has one,
+    else the master.
+    </summary>
+    <param name="slot_style">The slot's choice, as banner_style_of returns it.</param>
+    <param name="master_style">The master, as master_banner_style returns it.</param>
+    <returns>One of BANNER_STYLES.</returns>
+    <remarks>
+    Both arguments are checked again here, so an unknown value on either side
+    falls through: an unknown slot choice follows the master and an unknown
+    master gives DEFAULT_BANNER_STYLE.
+    </remarks>
+    """
+    if slot_style in BANNER_STYLES:
+        return slot_style
+    if master_style in BANNER_STYLES:
+        return master_style
+    return DEFAULT_BANNER_STYLE
 
 
 def _log(msg, level=xbmc.LOGINFO):
@@ -590,6 +713,7 @@ def new_slot(favourite='', day='Monday'):
         'autoopen': False,
         'snooze': True,
         'timeout_action': DEFAULT_TIMEOUT_ACTION,
+        'banner_style': DEFAULT_SLOT_BANNER_STYLE,  # one of SLOT_BANNER_STYLES
     }
 
 
@@ -773,7 +897,7 @@ def get_slot(slots, slot_id):
 
 # General settings that are worth backing up alongside the slots.
 BACKUP_SETTING_IDS = ['debug', 'poll_interval', 'catchup_hours', 'recent_watch_hours',
-                      'show_all_favourites']
+                      'show_all_favourites', 'banner_style']
 
 
 def build_backup():

@@ -4,9 +4,10 @@
 Unit test for the scheduler's handling of one occurrence of a slot
 (EngageScheduler._process_slot and the trackers around it): an autoopen slot
 gets no banner and never plays twice, a snooze and a catch-up both survive
-midnight, a stop issued by Stop and Resume After leaves the queue alone, and a
+midnight, a stop issued by Stop and Resume After leaves the queue alone, a
 banner reached with no warning window still counts down so its timeout action
-can fire.
+can fire, and the banner style a slot's prompt opens with is resolved from the
+slot's own choice and the master setting each time the banner opens.
 </summary>
 <remarks>
 Run by build-zip.sh before anything is zipped; exits non zero on the first
@@ -371,11 +372,90 @@ def test_list_pick_kept_while_snoozed():
     _Addon.settings['catchup_hours'] = 6
 
 
+def test_banner_style_resolution():
+    """
+    <summary>
+    A slot's banner style wins over the master, a slot on 'default' follows the
+    master as it is when the banner opens, and every unreadable value falls back
+    to the standard banner.
+    </summary>
+    """
+    # The master setting, as Kodi stores an enum: the index as a string.
+    equal(store.parse_banner_style_setting('0'), 'standard', 'enum index 0 is standard')
+    equal(store.parse_banner_style_setting('1'), 'thin', 'enum index 1 is thin')
+    equal(store.parse_banner_style_setting(''), 'standard', 'an unset master is standard')
+    equal(store.parse_banner_style_setting('Thin'), 'thin', 'a style name is accepted too')
+    equal(store.parse_banner_style_setting('7'), 'standard', 'an index off the end is standard')
+    equal(store.parse_banner_style_setting(None), 'standard', 'None is standard')
+    equal(store.BANNER_STYLE_SETTING_ORDER, ['standard', 'thin'],
+          'the enum order the settings.xml comment promises')
+
+    # The slot's own choice.
+    equal(store.banner_style_of({}), 'default', 'a slot saved before the setting follows the master')
+    equal(store.banner_style_of({'banner_style': 'thin'}), 'thin', 'thin stored reads as thin')
+    equal(store.banner_style_of({'banner_style': 'Standard'}), 'standard', 'case does not matter')
+    equal(store.banner_style_of({'banner_style': 'bogus'}), 'default', 'an unknown choice follows the master')
+    equal(store.new_slot()['banner_style'], 'default', 'a new slot follows the master')
+
+    # Resolution: the slot wins, else the master, else standard.
+    equal(store.resolve_banner_style('default', 'thin'), 'thin', 'default takes the master')
+    equal(store.resolve_banner_style('default', 'standard'), 'standard', 'default takes the master either way')
+    equal(store.resolve_banner_style('standard', 'thin'), 'standard', 'the slot overrides a thin master')
+    equal(store.resolve_banner_style('thin', 'standard'), 'thin', 'the slot overrides a standard master')
+    equal(store.resolve_banner_style('bogus', 'bogus'), 'standard', 'nothing readable gives standard')
+
+    # The master is read from the add-on settings.
+    _Addon.settings['banner_style'] = '1'
+    equal(store.master_banner_style(), 'thin', 'the master is read from the setting')
+    _Addon.settings.pop('banner_style')
+    equal(store.master_banner_style(), 'standard', 'a missing setting reads as standard')
+
+    # Each style maps to its own window XML, and both files ship.
+    equal(prompt.banner_xml_for('thin'), 'EngagePromptThin.xml', 'thin has its own window')
+    equal(prompt.banner_xml_for('standard'), 'EngagePrompt.xml', 'standard keeps the original window')
+    equal(prompt.banner_xml_for('nonsense'), 'EngagePrompt.xml', 'an unknown style gets the original')
+    for name in prompt.BANNER_XML.values():
+        check(os.path.isfile(os.path.join(ADDON_DIR, 'resources', 'skins', 'Default', '720p', name)),
+              '{} exists'.format(name))
+
+    # The scheduler resolves at popup time: the same stored slot opens a thin
+    # banner once the master changes, and a slot with its own choice does not.
+    opened = []
+
+    def fake_prompt(addon_path, show_name, episode_label, scheduled_dt, thumb='',
+                    timeout_action='queue', banner_style='standard'):
+        """<summary>Record the style the banner was asked to open with.</summary>"""
+        opened.append(banner_style)
+        return ('cancel', 5)
+
+    real_prompt = prompt.show_engage_prompt
+    prompt.show_engage_prompt = fake_prompt
+    try:
+        sched = scheduler.EngageScheduler()
+        sched._describe_slot = lambda slot, key=None: ('', '')
+        when = datetime(2026, 10, 14, 19, 0)
+        at(when)
+        following = scheduler.Slot(dict(store.new_slot(favourite='A'), id=1, label='A'))
+        own_choice = scheduler.Slot(dict(store.new_slot(favourite='B'), id=2, label='B',
+                                         banner_style='standard'))
+        _Addon.settings['banner_style'] = '0'
+        sched._handle_warning(following, when)
+        _Addon.settings['banner_style'] = '1'
+        sched._handle_warning(following, when)
+        sched._handle_warning(own_choice, when)
+        equal(opened, ['standard', 'thin', 'standard'],
+              'the master applies at popup time and a slot\'s own choice wins')
+    finally:
+        prompt.show_engage_prompt = real_prompt
+        _Addon.settings.pop('banner_style', None)
+
+
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_autoopen_no_banner_no_double_play, test_snooze_across_midnight,
                  test_catchup_across_midnight, test_stop_and_requeue_keeps_queue,
-                 test_warning_zero_countdown, test_list_pick_kept_while_snoozed):
+                 test_warning_zero_countdown, test_list_pick_kept_while_snoozed,
+                 test_banner_style_resolution):
         print('running {}'.format(test.__name__))
         try:
             test()

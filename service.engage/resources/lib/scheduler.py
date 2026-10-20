@@ -212,7 +212,10 @@ class Slot:
         <remarks>
         index is id minus one and exists only so log lines can say 'slot 3' via index + 1.
         timeout_action is resolved through slots.timeout_action_of so an old slot without
-        the key gets the default. hour, minute and warning are read with
+        the key gets the default, and banner_style through slots.banner_style_of in the
+        same way; banner_style is the slot's own choice ('default' means follow the
+        master setting) and is resolved to a layout only when the banner opens, in
+        _handle_warning. hour, minute and warning are read with
         slot_rules._int_or and clamped to their ranges, so a hand edited value such as
         '' or 25 gives the default rather than an exception that would stop every slot;
         the dialog and the API only ever store whole numbers in range.
@@ -242,6 +245,8 @@ class Slot:
         # What an untouched banner resolves to when the countdown hits zero.
         from resources.lib import slots as slot_store
         self.timeout_action = slot_store.timeout_action_of(data)
+        # The slot's banner layout choice: 'standard', 'thin' or 'default'.
+        self.banner_style = slot_store.banner_style_of(data)
         # 'favourite' (default) plays a single Kodi favourite (TV next-unwatched
         # or movie/folder). 'sequence' plays the next unwatched item from an
         # ordered library list: movies (e.g. the Marvel films) or episodes
@@ -1688,10 +1693,18 @@ class EngageScheduler:
         GUI-readiness wait is handled once in _wait_for_gui; we deliberately do
         NOT gate on the home window here, that would wrongly defer prompts
         whenever the user is browsing any menu.)
+
+        The banner layout is resolved here, each time, from the slot's own choice
+        and the master setting (slots.resolve_banner_style), so changing the master
+        in the settings dialog changes every slot left on 'default' from the next
+        banner on, without touching slots.json.
         </remarks>
         """
         from resources.lib.prompt import show_engage_prompt
+        from resources.lib import slots as slot_store
         addon_path = xbmcaddon.Addon(ADDON_ID).getAddonInfo('path')
+        banner_style = slot_store.resolve_banner_style(
+            slot.banner_style, slot_store.master_banner_style())
 
         # Work out the sub-line + poster for the banner, fresh from the library
         # so the banner never offers an episode that was watched since the
@@ -1714,10 +1727,10 @@ class EngageScheduler:
 
         action, snooze_minutes = show_engage_prompt(
             addon_path, slot.label, episode_label, scheduled_dt, thumb,
-            slot.timeout_action
+            slot.timeout_action, banner_style
         )
-        self._log('Prompt for slot {} returned action={}, snooze={}m'.format(
-            slot.index + 1, action, snooze_minutes))
+        self._log('Prompt for slot {} ({} banner) returned action={}, snooze={}m'.format(
+            slot.index + 1, banner_style, action, snooze_minutes))
         return action, snooze_minutes
 
     def _describe_slot(self, slot, key=None):
