@@ -9,7 +9,7 @@
 -->
 <addon id="service.engage"
        name="Engage"
-       version="1.11.1"
+       version="1.11.2"
        provider-name="c0def0rc0ffee">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
