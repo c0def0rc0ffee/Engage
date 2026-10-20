@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  <summary>
+  The uber thin layout with the buttons taken out: a single 24px line across
+  the top of the 720p canvas, show and episode on the left and the countdown
+  on the right, all in font12. Nothing on it can be pressed. When the
+  countdown reaches zero the banner resolves to the slot's own "When the
+  countdown ends" action, exactly as an untouched banner of any other style
+  does.
+  </summary>
+  <remarks>
+  Same window properties as EngagePromptUberThin.xml, so prompt.py drives it
+  unchanged; there is no control to focus, so it has no defaultcontrol. Back
+  and Stop still cancel it through EngagePrompt.onAction. An overdue catch-up
+  banner never fires on its own, so prompt.opening_style shows the buttoned
+  uber thin layout for one of those instead of this file.
+  </remarks>
+-->
+<window type="dialog">
+    <animation effect="slide" start="0,-40" end="0,0" time="250">WindowOpen</animation>
+    <animation effect="slide" start="0,0" end="0,-40" time="250">WindowClose</animation>
+    <controls>
+
+        <!-- Banner background, one text line tall -->
+        <control type="image">
+            <left>0</left>
+            <top>0</top>
+            <width>1280</width>
+            <height>24</height>
+            <texture colordiffuse="EE1A1A2E">white.png</texture>
+        </control>
+
+        <!-- Cyan accent line below -->
+        <control type="image">
+            <left>0</left>
+            <top>24</top>
+            <width>1280</width>
+            <height>2</height>
+            <texture colordiffuse="FF00BCD4">white.png</texture>
+        </control>
+
+        <!-- Show / favourite name, then the episode line when there is one -->
+        <control type="label">
+            <left>16</left>
+            <top>1</top>
+            <width>1000</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>white</textcolor>
+            <aligny>center</aligny>
+            <label>$INFO[Window.Property(showname)]$INFO[Window.Property(episode),   ·   ]</label>
+        </control>
+
+        <!-- Countdown, against the right edge -->
+        <control type="label">
+            <left>1030</left>
+            <top>1</top>
+            <width>234</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FFFFEB3B</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>$INFO[Window.Property(countdown)]</label>
+        </control>
+
+    </controls>
+</window>
