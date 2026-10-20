@@ -10,10 +10,17 @@ When the countdown reaches 0 with no user input, the banner resolves to the
 slot's own timeout action (Queue Next by default, see slots.py). The user can
 press any button before then to decide it themselves.
 
-Two layouts share this class and its window properties: the standard banner
-(EngagePrompt.xml) and the thin one (EngagePromptThin.xml), chosen per banner
-by the banner_style argument of show_engage_prompt. The scheduler resolves the
-style from the slot and the master setting (slots.resolve_banner_style).
+Four layouts share this class and its window properties: the standard banner
+(EngagePrompt.xml), the thin one (EngagePromptThin.xml), and the two single
+line uber thin ones (EngagePromptUberThin.xml with icon buttons,
+EngagePromptUberThinNoButtons.xml with none), chosen per banner by the
+banner_style argument of show_engage_prompt. The scheduler resolves the style
+from the slot and the master setting (slots.resolve_banner_style).
+
+The buttonless layout has nothing to press, so it only makes sense when the
+countdown will fire on its own. An overdue catch-up banner never does (see
+allow_autofire), so opening_style swaps it for the uber thin layout with
+buttons rather than leave a banner that only Back can clear.
 </remarks>
 """
 
@@ -37,14 +44,23 @@ BTN_STOP_RESUME = 9005
 SNOOZE_OPTIONS_LABELS = ['5 minutes', '10 minutes', '15 minutes', '30 minutes', '1 hour']
 SNOOZE_OPTIONS_VALUES = [5, 10, 15, 30, 60]
 
-# The window XML for each banner style (resources/skins/Default/720p). Both
-# set the same window properties and use the same button ids, so EngagePrompt
-# does not care which one is loaded.
+# The window XML for each banner style (resources/skins/Default/720p). All of
+# them read the same window properties and use the same button ids (the
+# buttonless one simply has no buttons), so EngagePrompt does not care which
+# one is loaded.
 BANNER_XML = {
     'standard': 'EngagePrompt.xml',
     'thin': 'EngagePromptThin.xml',
+    'uberthin': 'EngagePromptUberThin.xml',
+    'uberthin_nobuttons': 'EngagePromptUberThinNoButtons.xml',
 }
 DEFAULT_BANNER_XML = BANNER_XML['standard']
+
+# Layouts with no buttons, and the layout each one becomes when the banner
+# could not fire on its own and so has to offer the buttons after all.
+BUTTONLESS_FALLBACK = {
+    'uberthin_nobuttons': 'uberthin',
+}
 
 # How far past its scheduled time a banner may open and still fire its timeout
 # action on its own. Matches the scheduler's two minute grace: inside it the
@@ -256,13 +272,35 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
             self.close()
 
 
+def opening_style(banner_style, scheduled_dt, now):
+    """
+    <summary>
+    The layout a banner opening now really uses.
+    </summary>
+    <param name="banner_style">The resolved style, as slots.resolve_banner_style
+    returns it.</param>
+    <param name="scheduled_dt">When the slot is due.</param>
+    <param name="now">When the banner is opening.</param>
+    <returns>banner_style itself, except a buttonless style on a banner that
+    may not fire on its own, which becomes its BUTTONLESS_FALLBACK.</returns>
+    <remarks>
+    A catch-up banner for a slot missed long ago waits for the user rather
+    than playing hours late, so without buttons it could only ever be
+    cancelled. Giving it the buttons keeps every choice open.
+    </remarks>
+    """
+    if banner_style in BUTTONLESS_FALLBACK and not allow_autofire(scheduled_dt, now):
+        return BUTTONLESS_FALLBACK[banner_style]
+    return banner_style
+
+
 def banner_xml_for(banner_style):
     """
     <summary>
     The window XML file name for a banner style.
     </summary>
-    <param name="banner_style">'standard' or 'thin', as slots.resolve_banner_style
-    returns it.</param>
+    <param name="banner_style">One of the keys of BANNER_XML, as
+    slots.resolve_banner_style returns it.</param>
     <returns>A file name under resources/skins/Default/720p; the standard banner's
     for any style this module does not know.</returns>
     """
@@ -280,12 +318,17 @@ def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
     episode_label may be '' for movies / non-TV-show favourites.
     thumb is a poster/thumbnail image path (may be '').
     timeout_action is what an untouched countdown resolves to at zero.
-    banner_style picks the layout, 'standard' or 'thin' (see banner_xml_for);
-    it is the resolved style, never a slot's 'default'.
+    banner_style picks the layout (see banner_xml_for); it is the resolved
+    style, never a slot's 'default'. A buttonless style on an overdue
+    catch-up banner is swapped for its buttoned twin (see opening_style).
     </remarks>
     """
+    style = opening_style(banner_style, scheduled_dt, datetime.now())
+    if style != banner_style:
+        _log('{} banner is a catch-up that will not fire on its own, showing {} '
+             'so it has buttons'.format(banner_style, style))
     try:
-        dlg = EngagePrompt(banner_xml_for(banner_style), addon_path, 'Default', '720p')
+        dlg = EngagePrompt(banner_xml_for(style), addon_path, 'Default', '720p')
         dlg.show_name = show_name
         dlg.episode_label = episode_label
         dlg.scheduled_dt = scheduled_dt

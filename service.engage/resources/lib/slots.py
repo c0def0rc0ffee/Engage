@@ -59,37 +59,48 @@ TIMEOUT_ACTION_SHORT = {
 
 # How the banner is laid out when a slot's prompt pops up. 'standard' is the
 # original 100px strip with text buttons; 'thin' is the slim strip with icon
-# buttons and the poster hanging below it, the same size as before. A slot may
-# say 'default' to follow the master setting (settings.xml, banner_style),
-# which is resolved at popup time so changing the master changes every such
-# slot without rewriting slots.json.
+# buttons and the poster hanging below it, the same size as before. The two
+# uber thin styles are a single line of countdown sized text with no poster:
+# 'uberthin' keeps the icon buttons, 'uberthin_nobuttons' has none and simply
+# counts down to the slot's "When the countdown ends" action (Back still
+# cancels it). A slot may say 'default' to follow the master setting
+# (settings.xml, banner_style), which is resolved at popup time so changing the
+# master changes every such slot without rewriting slots.json.
 BANNER_STANDARD = 'standard'
 BANNER_THIN = 'thin'
+BANNER_UBERTHIN = 'uberthin'
+BANNER_UBERTHIN_NOBUTTONS = 'uberthin_nobuttons'
 BANNER_DEFAULT = 'default'
 # What the master falls back to when its setting is missing or unreadable, so
 # an install that has never seen the setting keeps the original banner.
 DEFAULT_BANNER_STYLE = BANNER_STANDARD
 # What a slot without the key does: follow the master.
 DEFAULT_SLOT_BANNER_STYLE = BANNER_DEFAULT
-# Order here is the order the pickers show them in. The master offers the two
+# Order here is the order the pickers show them in. The master offers the
 # real layouts; a slot offers those plus 'default'.
-BANNER_STYLES = [BANNER_STANDARD, BANNER_THIN]
-SLOT_BANNER_STYLES = [BANNER_DEFAULT, BANNER_STANDARD, BANNER_THIN]
+BANNER_STYLES = [BANNER_STANDARD, BANNER_THIN, BANNER_UBERTHIN, BANNER_UBERTHIN_NOBUTTONS]
+SLOT_BANNER_STYLES = [BANNER_DEFAULT] + BANNER_STYLES
 BANNER_STYLE_LABELS = {
     BANNER_DEFAULT: 'Use the default banner style',
     BANNER_STANDARD: 'Standard, the full height banner with text buttons',
     BANNER_THIN: 'Thin, a slim banner with icon buttons',
+    BANNER_UBERTHIN: 'Uber thin, one line with icon buttons',
+    BANNER_UBERTHIN_NOBUTTONS: 'Uber thin, no buttons, counts down to the countdown action',
 }
 # Short form for the slot list and the edit menu.
 BANNER_STYLE_SHORT = {
     BANNER_DEFAULT: 'Default',
     BANNER_STANDARD: 'Standard',
     BANNER_THIN: 'Thin',
+    BANNER_UBERTHIN: 'Uber thin',
+    BANNER_UBERTHIN_NOBUTTONS: 'Uber thin, no buttons',
 }
-# The settings.xml enum stores the index of its values list ("0" or "1"), in
+# The settings.xml enum stores the index of its values list ("0" to "3"), in
 # this order. Kept beside the enum's values attribute so the two cannot drift
-# without a reader noticing.
-BANNER_STYLE_SETTING_ORDER = [BANNER_STANDARD, BANNER_THIN]
+# without a reader noticing. New styles go on the end only, so an index
+# already saved keeps meaning the same layout.
+BANNER_STYLE_SETTING_ORDER = [BANNER_STANDARD, BANNER_THIN, BANNER_UBERTHIN,
+                              BANNER_UBERTHIN_NOBUTTONS]
 
 
 # How a slot repeats. Weekly uses the 'days' list; every few weeks uses 'days',
@@ -259,7 +270,7 @@ def timeout_action_of(slot):
 def banner_style_of(slot):
     """
     <summary>
-    The banner style this slot asks for: 'standard', 'thin' or 'default'.
+    The banner style this slot asks for: one of BANNER_STYLES, or 'default'.
     </summary>
     <param name="slot">A slot dict from the store.</param>
     <returns>One of SLOT_BANNER_STYLES; 'default' when the key is missing or
@@ -283,7 +294,7 @@ def parse_banner_style_setting(raw):
     <returns>One of BANNER_STYLES; DEFAULT_BANNER_STYLE for anything unreadable.</returns>
     <remarks>
     Kodi stores an enum setting as the index of the chosen entry, as a string,
-    so "0" and "1" are mapped through BANNER_STYLE_SETTING_ORDER. The style
+    so "0" to "3" are mapped through BANNER_STYLE_SETTING_ORDER. The style
     names themselves are accepted too, in any case, so a backup written by hand
     or a future select type setting reads the same way. Empty, which is what an
     install upgraded from before the setting existed reports until it is first

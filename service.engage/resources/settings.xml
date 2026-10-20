@@ -26,8 +26,9 @@
     <!-- The banner layout every slot uses unless it picks its own in Manage
          slots. An enum stores the index of the chosen value, so the order here
          must match BANNER_STYLE_SETTING_ORDER in resources/lib/slots.py:
-         0 = Standard (the original banner), 1 = Thin. -->
-    <setting id="banner_style" type="enum" label="Default banner style" values="Standard|Thin" default="0"/>
+         0 = Standard (the original banner), 1 = Thin, 2 = Uber thin,
+         3 = Uber thin with no buttons. New styles go on the end only. -->
+    <setting id="banner_style" type="enum" label="Default banner style" values="Standard|Thin|Uber thin|Uber thin, no buttons" default="0"/>
     <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
     <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
     <!-- Starts Engage's add-on API (resources/lib/api_server.py), which listens on

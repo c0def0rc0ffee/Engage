@@ -385,16 +385,26 @@ def test_banner_style_resolution():
     equal(store.parse_banner_style_setting('1'), 'thin', 'enum index 1 is thin')
     equal(store.parse_banner_style_setting(''), 'standard', 'an unset master is standard')
     equal(store.parse_banner_style_setting('Thin'), 'thin', 'a style name is accepted too')
+    equal(store.parse_banner_style_setting('2'), 'uberthin', 'enum index 2 is uber thin')
+    equal(store.parse_banner_style_setting('3'), 'uberthin_nobuttons', 'enum index 3 is uber thin, no buttons')
     equal(store.parse_banner_style_setting('7'), 'standard', 'an index off the end is standard')
     equal(store.parse_banner_style_setting(None), 'standard', 'None is standard')
-    equal(store.BANNER_STYLE_SETTING_ORDER, ['standard', 'thin'],
+    equal(store.BANNER_STYLE_SETTING_ORDER, ['standard', 'thin', 'uberthin', 'uberthin_nobuttons'],
           'the enum order the settings.xml comment promises')
+    with open(os.path.join(ADDON_DIR, 'resources', 'settings.xml'), encoding='utf-8') as f:
+        check('values="Standard|Thin|Uber thin|Uber thin, no buttons"' in f.read(),
+              'settings.xml lists the styles in BANNER_STYLE_SETTING_ORDER')
 
     # The slot's own choice.
     equal(store.banner_style_of({}), 'default', 'a slot saved before the setting follows the master')
     equal(store.banner_style_of({'banner_style': 'thin'}), 'thin', 'thin stored reads as thin')
     equal(store.banner_style_of({'banner_style': 'Standard'}), 'standard', 'case does not matter')
     equal(store.banner_style_of({'banner_style': 'bogus'}), 'default', 'an unknown choice follows the master')
+    equal(store.banner_style_of({'banner_style': 'uberthin_nobuttons'}), 'uberthin_nobuttons',
+          'the buttonless style is a slot choice')
+    for style in store.SLOT_BANNER_STYLES:
+        check(style in store.BANNER_STYLE_LABELS and style in store.BANNER_STYLE_SHORT,
+              '{} has a label and a short form'.format(style))
     equal(store.new_slot()['banner_style'], 'default', 'a new slot follows the master')
 
     # Resolution: the slot wins, else the master, else standard.
@@ -403,6 +413,9 @@ def test_banner_style_resolution():
     equal(store.resolve_banner_style('standard', 'thin'), 'standard', 'the slot overrides a thin master')
     equal(store.resolve_banner_style('thin', 'standard'), 'thin', 'the slot overrides a standard master')
     equal(store.resolve_banner_style('bogus', 'bogus'), 'standard', 'nothing readable gives standard')
+    equal(store.resolve_banner_style('default', 'uberthin'), 'uberthin', 'default takes an uber thin master')
+    equal(store.resolve_banner_style('uberthin_nobuttons', 'thin'), 'uberthin_nobuttons',
+          'the slot overrides with the buttonless style')
 
     # The master is read from the add-on settings.
     _Addon.settings['banner_style'] = '1'
@@ -414,6 +427,29 @@ def test_banner_style_resolution():
     equal(prompt.banner_xml_for('thin'), 'EngagePromptThin.xml', 'thin has its own window')
     equal(prompt.banner_xml_for('standard'), 'EngagePrompt.xml', 'standard keeps the original window')
     equal(prompt.banner_xml_for('nonsense'), 'EngagePrompt.xml', 'an unknown style gets the original')
+    equal(prompt.banner_xml_for('uberthin'), 'EngagePromptUberThin.xml', 'uber thin has its own window')
+    equal(prompt.banner_xml_for('uberthin_nobuttons'), 'EngagePromptUberThinNoButtons.xml',
+          'the buttonless uber thin has its own window')
+    for style in store.BANNER_STYLES:
+        check(style in prompt.BANNER_XML, '{} has a window'.format(style))
+
+    # A buttonless banner keeps its layout while it can fire on its own, and
+    # becomes the buttoned uber thin one for an overdue catch-up, which waits
+    # for the user and so needs something to press.
+    due = datetime(2026, 10, 20, 20, 0)
+    equal(prompt.opening_style('uberthin_nobuttons', due, due - timedelta(minutes=5)),
+          'uberthin_nobuttons', 'a buttonless banner opening ahead of time stays buttonless')
+    equal(prompt.opening_style('uberthin_nobuttons', due, due + timedelta(seconds=60)),
+          'uberthin_nobuttons', 'inside the grace it still fires, so stays buttonless')
+    equal(prompt.opening_style('uberthin_nobuttons', due, due + timedelta(hours=2)),
+          'uberthin', 'an overdue catch-up gets the buttons back')
+    equal(prompt.opening_style('thin', due, due + timedelta(hours=2)),
+          'thin', 'a buttoned style is never swapped')
+
+    with open(os.path.join(ADDON_DIR, 'resources', 'skins', 'Default', '720p',
+                           'EngagePromptUberThinNoButtons.xml'), encoding='utf-8') as f:
+        check('type="button"' not in f.read(), 'the buttonless window has no buttons')
+
     for name in prompt.BANNER_XML.values():
         check(os.path.isfile(os.path.join(ADDON_DIR, 'resources', 'skins', 'Default', '720p', name)),
               '{} exists'.format(name))
