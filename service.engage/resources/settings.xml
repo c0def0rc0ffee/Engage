@@ -4,9 +4,9 @@
   Kodi settings definition for the add-on: one General category holding the
   read-only version field, the Manage slots action button, debug logging, the
   poll interval, the catch-up window and its prompt cap, the recent watch
-  window, the one-shot test mode, the favourites filter switch and the switch for
-  the add-on API that the JellyStat dashboard uses. Labels are plain text; the add-on
-  ships no strings.po.
+  window, the master banner style, the one-shot test mode, the favourites filter
+  switch and the switch for the add-on API that the JellyStat dashboard uses.
+  Labels are plain text; the add-on ships no strings.po.
   </summary>
 -->
 <settings>
@@ -23,6 +23,11 @@
     <setting id="catchup_hours" type="slider" label="Catch-up window for missed slots (hours, 0 = off)" default="6" range="0,1,12" option="int"/>
     <setting id="catchup_max_prompts" type="slider" label="Max times to show a missed-slot banner" default="3" range="1,1,10" option="int"/>
     <setting id="recent_watch_hours" type="slider" label="Skip a slot watched in the last (hours, 0 = off)" default="4" range="0,1,24" option="int"/>
+    <!-- The banner layout every slot uses unless it picks its own in Manage
+         slots. An enum stores the index of the chosen value, so the order here
+         must match BANNER_STYLE_SETTING_ORDER in resources/lib/slots.py:
+         0 = Standard (the original banner), 1 = Thin. -->
+    <setting id="banner_style" type="enum" label="Default banner style" values="Standard|Thin" default="0"/>
     <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
     <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
     <!-- Starts Engage's add-on API (resources/lib/api_server.py), which listens on

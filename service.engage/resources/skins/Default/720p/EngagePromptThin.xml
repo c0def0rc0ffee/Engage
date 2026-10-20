@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  <summary>
+  The thin layout of the Engage banner dialog: a 52px strip across the top of
+  the 720p canvas instead of the standard 100px one (EngagePrompt.xml), with the
+  poster at exactly the same size and position, hanging below the strip. Two
+  text rows sit beside the poster: show name and countdown on the first, the
+  episode line on the second. The five buttons are icons on the right of the
+  second row, and one label to their left names whichever icon has focus, so
+  the explanation takes the room of one word rather than five buttons.
+  </summary>
+  <remarks>
+  Same window properties and button ids as EngagePrompt.xml, so prompt.py drives
+  both without knowing which is loaded. The two playback-only buttons hide while
+  the canresume property is not 1 and the row is right aligned, so the icons
+  always hug the right edge. The icons are in ../media; each is a white glyph
+  tinted through colordiffuse, cyan when focused, dimmed when not, pink for
+  Cancel as on the standard banner.
+  </remarks>
+-->
+<window type="dialog">
+    <defaultcontrol always="true">9001</defaultcontrol>
+    <animation effect="slide" start="0,-140" end="0,0" time="300">WindowOpen</animation>
+    <animation effect="slide" start="0,0" end="0,-140" time="300">WindowClose</animation>
+    <controls>
+
+        <!-- Banner background, 52px tall -->
+        <control type="image">
+            <left>0</left>
+            <top>0</top>
+            <width>1280</width>
+            <height>52</height>
+            <texture colordiffuse="EE1A1A2E">white.png</texture>
+        </control>
+
+        <!-- Cyan accent strip below -->
+        <control type="image">
+            <left>0</left>
+            <top>52</top>
+            <width>1280</width>
+            <height>3</height>
+            <texture colordiffuse="FF00BCD4">white.png</texture>
+        </control>
+
+        <!-- Poster / thumbnail, portrait, the same size and place as on the
+             standard banner, so it hangs well below this thinner strip -->
+        <control type="image">
+            <left>20</left>
+            <top>6</top>
+            <width>88</width>
+            <height>128</height>
+            <aspectratio aligny="top">keep</aspectratio>
+            <texture>$INFO[Window.Property(thumb)]</texture>
+        </control>
+
+        <!-- Row 1: show / favourite name -->
+        <control type="label">
+            <left>124</left>
+            <top>4</top>
+            <width>700</width>
+            <height>22</height>
+            <font>font13</font>
+            <textcolor>white</textcolor>
+            <aligny>center</aligny>
+            <label>$INFO[Window.Property(showname)]</label>
+        </control>
+
+        <!-- Row 1: countdown, right aligned -->
+        <control type="label">
+            <left>900</left>
+            <top>4</top>
+            <width>364</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FFFFEB3B</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>$INFO[Window.Property(countdown)]</label>
+        </control>
+
+        <!-- Row 2: episode line -->
+        <control type="label">
+            <left>124</left>
+            <top>26</top>
+            <width>440</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FFCCCCCC</textcolor>
+            <aligny>center</aligny>
+            <label>$INFO[Window.Property(episode)]</label>
+        </control>
+
+        <!-- Row 2: what the focused icon does. One label per button, each
+             visible only while its button has focus, so the text changes as
+             the focus moves along the icons. -->
+        <control type="label">
+            <visible>Control.HasFocus(9001)</visible>
+            <left>580</left>
+            <top>26</top>
+            <width>480</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FF00BCD4</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>[B]Start now[/B]</label>
+        </control>
+        <control type="label">
+            <visible>Control.HasFocus(9002)</visible>
+            <left>580</left>
+            <top>26</top>
+            <width>480</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FF00BCD4</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>Snooze...</label>
+        </control>
+        <control type="label">
+            <visible>Control.HasFocus(9003)</visible>
+            <left>580</left>
+            <top>26</top>
+            <width>480</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FF00BCD4</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>Queue next, play when the current item finishes</label>
+        </control>
+        <control type="label">
+            <visible>Control.HasFocus(9005)</visible>
+            <left>580</left>
+            <top>26</top>
+            <width>480</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FF00BCD4</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>Stop what is playing, play this, resume after</label>
+        </control>
+        <control type="label">
+            <visible>Control.HasFocus(9004)</visible>
+            <left>580</left>
+            <top>26</top>
+            <width>480</width>
+            <height>22</height>
+            <font>font12</font>
+            <textcolor>FFE91E63</textcolor>
+            <align>right</align>
+            <aligny>center</aligny>
+            <label>Cancel, skip this one</label>
+        </control>
+
+        <!-- Row 2: icon button row, hugging the right edge -->
+        <control type="grouplist" id="9000">
+            <left>1070</left>
+            <top>23</top>
+            <width>194</width>
+            <height>28</height>
+            <orientation>horizontal</orientation>
+            <itemgap>10</itemgap>
+            <align>right</align>
+
+            <control type="button" id="9001">
+                <width>28</width>
+                <height>28</height>
+                <label></label>
+                <texturefocus colordiffuse="FF00BCD4">icon_start.png</texturefocus>
+                <texturenofocus colordiffuse="99FFFFFF">icon_start.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9002">
+                <width>28</width>
+                <height>28</height>
+                <label></label>
+                <texturefocus colordiffuse="FF00BCD4">icon_snooze.png</texturefocus>
+                <texturenofocus colordiffuse="99FFFFFF">icon_snooze.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9003">
+                <visible>String.IsEqual(Window.Property(canresume),1)</visible>
+                <width>28</width>
+                <height>28</height>
+                <label></label>
+                <texturefocus colordiffuse="FF00BCD4">icon_queue.png</texturefocus>
+                <texturenofocus colordiffuse="99FFFFFF">icon_queue.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9005">
+                <visible>String.IsEqual(Window.Property(canresume),1)</visible>
+                <width>28</width>
+                <height>28</height>
+                <label></label>
+                <texturefocus colordiffuse="FF00BCD4">icon_stop_resume.png</texturefocus>
+                <texturenofocus colordiffuse="99FFFFFF">icon_stop_resume.png</texturenofocus>
+            </control>
+
+            <control type="button" id="9004">
+                <width>28</width>
+                <height>28</height>
+                <label></label>
+                <texturefocus colordiffuse="FFE91E63">icon_cancel.png</texturefocus>
+                <texturenofocus colordiffuse="99FFFFFF">icon_cancel.png</texturenofocus>
+            </control>
+
+        </control>
+
+    </controls>
+</window>

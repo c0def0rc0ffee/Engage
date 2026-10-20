@@ -9,6 +9,11 @@ already playing.
 When the countdown reaches 0 with no user input, the banner resolves to the
 slot's own timeout action (Queue Next by default, see slots.py). The user can
 press any button before then to decide it themselves.
+
+Two layouts share this class and its window properties: the standard banner
+(EngagePrompt.xml) and the thin one (EngagePromptThin.xml), chosen per banner
+by the banner_style argument of show_engage_prompt. The scheduler resolves the
+style from the slot and the master setting (slots.resolve_banner_style).
 </remarks>
 """
 
@@ -31,6 +36,15 @@ BTN_STOP_RESUME = 9005
 
 SNOOZE_OPTIONS_LABELS = ['5 minutes', '10 minutes', '15 minutes', '30 minutes', '1 hour']
 SNOOZE_OPTIONS_VALUES = [5, 10, 15, 30, 60]
+
+# The window XML for each banner style (resources/skins/Default/720p). Both
+# set the same window properties and use the same button ids, so EngagePrompt
+# does not care which one is loaded.
+BANNER_XML = {
+    'standard': 'EngagePrompt.xml',
+    'thin': 'EngagePromptThin.xml',
+}
+DEFAULT_BANNER_XML = BANNER_XML['standard']
 
 # How far past its scheduled time a banner may open and still fire its timeout
 # action on its own. Matches the scheduler's two minute grace: inside it the
@@ -242,8 +256,21 @@ class EngagePrompt(xbmcgui.WindowXMLDialog):
             self.close()
 
 
+def banner_xml_for(banner_style):
+    """
+    <summary>
+    The window XML file name for a banner style.
+    </summary>
+    <param name="banner_style">'standard' or 'thin', as slots.resolve_banner_style
+    returns it.</param>
+    <returns>A file name under resources/skins/Default/720p; the standard banner's
+    for any style this module does not know.</returns>
+    """
+    return BANNER_XML.get(banner_style, DEFAULT_BANNER_XML)
+
+
 def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
-                       thumb='', timeout_action='queue'):
+                       thumb='', timeout_action='queue', banner_style='standard'):
     """
     <summary>
     Show the banner prompt and return (choice, snooze_minutes).
@@ -253,10 +280,12 @@ def show_engage_prompt(addon_path, show_name, episode_label, scheduled_dt,
     episode_label may be '' for movies / non-TV-show favourites.
     thumb is a poster/thumbnail image path (may be '').
     timeout_action is what an untouched countdown resolves to at zero.
+    banner_style picks the layout, 'standard' or 'thin' (see banner_xml_for);
+    it is the resolved style, never a slot's 'default'.
     </remarks>
     """
     try:
-        dlg = EngagePrompt('EngagePrompt.xml', addon_path, 'Default', '720p')
+        dlg = EngagePrompt(banner_xml_for(banner_style), addon_path, 'Default', '720p')
         dlg.show_name = show_name
         dlg.episode_label = episode_label
         dlg.scheduled_dt = scheduled_dt

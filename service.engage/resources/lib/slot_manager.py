@@ -130,6 +130,25 @@ def _pick_timeout_action(current):
     return store.TIMEOUT_ACTIONS[idx]
 
 
+def _pick_banner_style(current):
+    """
+    <summary>
+    Which banner layout the slot's prompt uses: the master default, standard
+    or thin. Returns a style id, or None if the user backed out.
+    </summary>
+    <param name="current">The slot's current choice, as store.banner_style_of returns it.</param>
+    """
+    labels = [store.BANNER_STYLE_LABELS[b] for b in store.SLOT_BANNER_STYLES]
+    try:
+        pre = store.SLOT_BANNER_STYLES.index(current)
+    except ValueError:
+        pre = store.SLOT_BANNER_STYLES.index(store.DEFAULT_SLOT_BANNER_STYLE)
+    idx = xbmcgui.Dialog().select('Banner style', labels, preselect=pre)
+    if idx < 0:
+        return None
+    return store.SLOT_BANNER_STYLES[idx]
+
+
 def _slot_line(slot):
     """
     <summary>
@@ -762,6 +781,8 @@ def _edit_slot(slot_id):
             'Warning minutes: {}'.format(s.get('warning', 5)),
             'When the countdown ends: {}'.format(
                 store.TIMEOUT_ACTION_SHORT[store.timeout_action_of(s)]),
+            'Banner style: {}'.format(
+                store.BANNER_STYLE_SHORT[store.banner_style_of(s)]),
             'Skip the banner, just play at the set time: {}'.format(
                 'yes' if s.get('autoopen') else 'no'),
             'Allow snooze: {}'.format('yes' if s.get('snooze') else 'no'),
@@ -819,10 +840,14 @@ def _edit_slot(slot_id):
             if action is not None:
                 s['timeout_action'] = action
         elif idx == 8:
-            s['autoopen'] = not s.get('autoopen')
+            style = _pick_banner_style(store.banner_style_of(s))
+            if style is not None:
+                s['banner_style'] = style
         elif idx == 9:
-            s['snooze'] = not s.get('snooze')
+            s['autoopen'] = not s.get('autoopen')
         elif idx == 10:
+            s['snooze'] = not s.get('snooze')
+        elif idx == 11:
             import copy
             dup = copy.deepcopy(s)
             dup['id'] = store.next_id(slots)
@@ -831,7 +856,7 @@ def _edit_slot(slot_id):
             store.save_slots(slots)
             _notify('Duplicated slot')
             continue
-        elif idx == 11:
+        elif idx == 12:
             if xbmcgui.Dialog().yesno('Engage', 'Delete "{}"?'.format(name)):
                 slots = [x for x in slots if x.get('id') != slot_id]
                 store.save_slots(slots)
