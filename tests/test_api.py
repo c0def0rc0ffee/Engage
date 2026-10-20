@@ -331,6 +331,49 @@ def test_to_api():
     equal(again, stored, 'a read record sent back changes nothing')
 
 
+def test_next_due_and_sorts():
+    """
+    <summary>
+    Each record says when it next runs, as words and as a sort key, and /info
+    declares the list orders and the fields JellyStat may edit on a line.
+    </summary>
+    """
+    print('running test_next_due_and_sorts')
+    from datetime import datetime
+    now = datetime(2026, 10, 20, 18, 30)  # a Tuesday evening
+    weekly = {'id': 1, 'kind': 'favourite', 'favourite': 'X', 'enabled': True,
+              'repeat': 'weekly', 'days': ['Tuesday', 'Thursday'], 'hour': 20, 'minute': 0}
+    record = to_api(weekly, now)
+    equal(record['next_due'], '2026-10-20T20:00', 'tonight, later on')
+    equal(record['next'], 'Next: Tonight 20:00', 'in the Coming up words')
+    passed = dict(weekly, hour=18, minute=0)
+    equal(to_api(passed, now)['next_due'], '2026-10-22T18:00', 'a time gone today moves to the next day')
+    this_minute = dict(weekly, hour=18, minute=30)
+    equal(to_api(this_minute, now)['next_due'], '2026-10-20T18:30', 'the current minute still counts')
+    gone = dict(weekly, date='2026-10-01')
+    equal((to_api(gone, now)['next_due'], to_api(gone, now)['next']),
+          ('', 'Not due in the next year'), 'a one shot date already gone')
+    yearly = {'id': 2, 'kind': 'favourite', 'favourite': 'X', 'enabled': True,
+              'repeat': 'yearly', 'month': 9, 'month_day': 1, 'hour': 19, 'minute': 0}
+    equal(to_api(yearly, now)['next_due'], '2027-09-01T19:00', 'a yearly slot finds next year')
+    check('next' in slot_rules.READ_ONLY and 'next_due' in slot_rules.READ_ONLY,
+          'neither is ever stored')
+    stored = from_api({'next': 'x', 'next_due': 'y', 'time': '21:00'}, weekly)
+    check('next' not in stored and 'next_due' not in stored, 'a write carrying them ignores them')
+
+    info = api_server.info()['resources'][0]
+    equal(info['inline'], ['days', 'time'], 'days and time are editable on the line')
+    fields = {f['key'] for f in slot_rules.schema()['slots']['fields']}
+    for key in info['inline']:
+        check(key in fields, 'inline field {} is in the schema'.format(key))
+    sort_keys = [entry['key'] for entry in info['sorts']]
+    equal(sort_keys, ['next', 'kind', 'title', 'time'], 'the orders offered')
+    record_keys = set(to_api(weekly, now)) | {'kind'}
+    for entry in info['sorts']:
+        for part in entry['by']:
+            check(part['field'] in record_keys, '{} sorts on a key records carry'.format(entry['key']))
+
+
 def test_schema_matches_rules():
     """<summary>The schema's fields, show_when rules and checkers agree with the code.</summary>"""
     print('running test_schema_matches_rules')
@@ -723,7 +766,8 @@ def main():
     </summary>
     """
     for test in (test_rules_create, test_rules_repeats, test_rules_sequences_and_lists,
-                 test_rules_edit_keeps_unsent, test_to_api, test_schema_matches_rules,
+                 test_rules_edit_keeps_unsent, test_to_api, test_next_due_and_sorts,
+                 test_schema_matches_rules,
                  test_routes, test_backup_restore, test_options, test_server,
                  test_start_announce_failure, test_store):
         test()
