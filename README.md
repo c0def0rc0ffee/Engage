@@ -154,7 +154,7 @@ numbered rows below for its "Coming up" list.
 | `Engage.Next.State` | `upcoming`, `warning`, `snoozed` or `overdue` | `upcoming` |
 | `Engage.Next.Count` | How many slots are enabled | `4` |
 
-Beside that single set, the next eleven occurrences across every enabled slot,
+Beside that single set, the next 22 occurrences across every enabled slot,
 in due order over the coming seven days, are published as numbered rows. Each
 row is the slot's title and when it is due, deliberately without an episode
 line. Number 1 is the same occurrence as the single set. A Functional list
@@ -162,14 +162,14 @@ slot is named differently: a random one by its list, an in order one by the
 item due to play, and a second showing of it by the item after that. A weekly slot on two
 days this week appears twice; a number with no occurrence has both properties
 cleared, so gate the list on `Engage.Next.1.Label` and each row on its own
-label. Rows are written from 11 down to 1 with each row's label last, and
+label. Rows are written from 22 down to 1 with each row's label last, and
 cleared from 1 upwards with each row's label first, so a half updated list is
 never shown.
 
 | `Window(home).Property(...)` | What it holds | Example |
 |---|---|---|
-| `Engage.Next.1.Label` to `Engage.Next.11.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
-| `Engage.Next.1.When` to `Engage.Next.11.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
+| `Engage.Next.1.Label` to `Engage.Next.22.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
+| `Engage.Next.1.When` to `Engage.Next.22.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
 
 ## For developers
 

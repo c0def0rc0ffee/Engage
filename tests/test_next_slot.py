@@ -431,10 +431,10 @@ def test_publish():
 # --- next_property_order ----------------------------------------------------------
 
 def test_property_order():
-    """<summary>Rows written from 11 down to 1, Label last; cleared from 1 up, Label first.</summary>"""
+    """<summary>Rows written from 22 down to 1, Label last; cleared from 1 up, Label first.</summary>"""
     publishing = scheduler.next_property_order({'Label': 'x', '1.Label': 'x', '2.Label': 'x'})
     equal(publishing[:10], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
-    equal(publishing[10:12], ['11.Label', '11.When'], 'an empty row clears Label first')
+    equal(publishing[10:12], ['22.Label', '22.When'], 'an empty row clears Label first')
     equal(publishing[-4:], ['2.When', '2.Label', '1.When', '1.Label'],
           'occupied rows end with row 1, each Label last')
     equal(len(publishing), 10 + 2 * scheduler.NEXT_LIST_COUNT, 'every name once')
@@ -476,7 +476,7 @@ def test_occurrences():
 # --- The numbered list ----------------------------------------------------------------
 
 def test_publish_list():
-    """<summary>Rows in due order across slots, title and When only, repeats allowed, eleven at most, write and clear order.</summary>"""
+    """<summary>Rows in due order across slots, title and When only, repeats allowed, 22 at most, write and clear order.</summary>"""
     reset_window()
     store.save_slots([
         make_slot(1, 'Voyager', ['Sunday', 'Thursday'], 19),
@@ -503,12 +503,13 @@ def test_publish_list():
             ('Daily', 'Friday 18:00'),
             ('TNG', 'Saturday 21:00'),
             ('Voyager', 'Sunday 18/10/2026 19:00'),
+            ('Late', 'Sunday 18/10/2026 23:00'),
         ]
         for number, (label, when) in enumerate(expected, start=1):
             equal(got.get('{}.Label'.format(number)), label, 'row {} Label'.format(number))
             equal(got.get('{}.Episode'.format(number)), None, 'row {} has no episode line'.format(number))
             equal(got.get('{}.When'.format(number)), when, 'row {} When'.format(number))
-        equal(got.get('12.Label'), None, 'the twelfth occurrence (Late, next Sunday) is not published')
+        equal(got.get('13.Label'), None, 'nothing past the seven day look ahead is published')
         equal(got.get('Label'), 'Voyager', 'single set Label matches row 1')
         equal(got.get('Episode'), 'S03E04, Gravity', 'the single set keeps its episode line')
         equal(got.get('When'), 'Tonight 19:00', 'single set When matches row 1')
@@ -517,19 +518,27 @@ def test_publish_list():
 
         written = [w[1] for w in WRITES]
         labels = [name for name in written if name.endswith('.Label') and name != 'Engage.Next.Label']
-        equal(labels, ['Engage.Next.{}.Label'.format(n) for n in range(11, 0, -1)],
-              'row Labels written from 11 down to 1')
-        for number in range(1, 12):
+        equal(labels, ['Engage.Next.{}.Label'.format(n) for n in range(12, 0, -1)],
+              'row Labels written from 12 down to 1')
+        for number in range(1, 13):
             row = [name for name in written if name.startswith('Engage.Next.{}.'.format(number))]
             equal(row[-1], 'Engage.Next.{}.Label'.format(number), 'row {} Label written last'.format(number))
-        check(written.index('Engage.Next.Label') < written.index('Engage.Next.11.Label'),
+        check(written.index('Engage.Next.Label') < written.index('Engage.Next.12.Label'),
               'the single set goes before the rows')
-        equal(len(WRITES), 10 + 11 * 2 - 1,
+        equal(len(WRITES), 10 + 12 * 2 - 1,
               'every property written once; the empty Thumb is not written')
 
         del WRITES[:]
         sched._publish_next('list again')
         equal(WRITES, [], 'nothing changed, nothing written')
+
+        # COMING-UP-MORE: the cap is 22. Four daily slots give 32 in the window.
+        every_day = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        store.save_slots([make_slot(n, 'Cap{}'.format(n), every_day, 17 + n) for n in range(1, 5)])
+        sched._publish_next('cap')
+        got = props()
+        check(got.get('22.Label'), 'row 22 is published')
+        equal(got.get('23.Label'), None, 'row 23 is not: 22 at most')
 
         # Two slots due at the same minute keep their list order, in row 1 and the single set.
         store.save_slots([
