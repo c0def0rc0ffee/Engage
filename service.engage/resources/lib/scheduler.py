@@ -77,7 +77,9 @@ NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
 # 1 and cleared from 1 upwards, so a skin that gates its list on row 1 and
 # each row on its own label never shows a half updated list. See
 # next_property_order.
-NEXT_LIST_COUNT = 11
+# COMING-UP-MORE, 21/10/2026: 22, up from 11, so Functional's 22 line list can
+# fill when several slots share a day and each takes one line instead of two.
+NEXT_LIST_COUNT = 22
 NEXT_LIST_NAMES = ('When', 'Label')
 # How far ahead the next occurrence is looked for. Today plus seven days, so a
 # weekly slot already dealt with today still has a next occurrence (the same
