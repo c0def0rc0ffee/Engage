@@ -679,18 +679,26 @@ def _pick_list(current_name):
     return lists[idx]['name'] if idx >= 0 else None
 
 
-def _pick_list_mode(current):
+def _pick_list_mode(current, list_name=''):
     """
     <summary>
-    Ask whether a list slot plays in list order or at random.
+    Ask how a list slot picks from its list.
     </summary>
     <param name="current">The mode to preselect.</param>
-    <returns>'next' or 'random', or None when the user backed out.</returns>
+    <param name="list_name">The list the slot plays from, to know whether it is all
+    TV.</param>
+    <returns>One of functional_lists.MODES, or None when the user backed out.</returns>
+    <remarks>
+    LIST-EACH, 22/10/2026: one episode from each show is offered only for a list of
+    TV (functional_lists.all_tv), since it plays the next episode of every show.
     """
-    labels = [functional_lists.MODE_LABELS[m] for m in functional_lists.MODES]
-    pre = functional_lists.MODES.index(current) if current in functional_lists.MODES else 0
+    found = functional_lists.find_list(list_name) if list_name else None
+    tv = bool(found) and functional_lists.all_tv(found['items'])
+    modes = [m for m in functional_lists.MODES if tv or m != functional_lists.MODE_EACH]
+    labels = [functional_lists.MODE_LABELS[m] for m in modes]
+    pre = modes.index(current) if current in modes else 0
     idx = xbmcgui.Dialog().select('What should play', labels, preselect=pre)
-    return functional_lists.MODES[idx] if idx >= 0 else None
+    return modes[idx] if idx >= 0 else None
 
 
 def _pick_list_sequels(current):
@@ -723,7 +731,7 @@ def _add_list_slot():
     name = _pick_list('')
     if not name:
         return
-    mode = _pick_list_mode(functional_lists.DEFAULT_MODE)
+    mode = _pick_list_mode(functional_lists.DEFAULT_MODE, name)
     if mode is None:
         return
     slot = store.new_list_slot(name, mode)
@@ -772,7 +780,7 @@ def _edit_list_choice(s):
         if name:
             s['list_name'] = name
     elif idx == 1:
-        new_mode = _pick_list_mode(mode)
+        new_mode = _pick_list_mode(mode, s.get('list_name') or '')
         if new_mode:
             s['list_mode'] = new_mode
     elif idx == 2:

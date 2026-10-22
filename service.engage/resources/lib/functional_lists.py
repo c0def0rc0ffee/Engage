@@ -50,21 +50,28 @@ MODE_NEXT = 'next'
 MODE_TURN = 'turn'
 MODE_RANDOM = 'random'
 MODE_RANDOM_ANY = 'random_any'
+# LIST-EACH, 22/10/2026: every show in the list at once, the next unwatched
+# episode of each, played back to back as one Kodi playlist. Only offered for
+# a list of TV (EACH_TYPES); anything else in the list is passed over.
+MODE_EACH = 'each'
+EACH_TYPES = ('tvshow', 'season', 'episode')
 DEFAULT_MODE = MODE_NEXT
 RANDOM_MODES = (MODE_RANDOM, MODE_RANDOM_ANY)
 # Order here is the order the picker shows them in.
-MODES = [MODE_NEXT, MODE_TURN, MODE_RANDOM, MODE_RANDOM_ANY]
+MODES = [MODE_NEXT, MODE_TURN, MODE_RANDOM, MODE_RANDOM_ANY, MODE_EACH]
 MODE_LABELS = {
     MODE_NEXT: 'In order, the next unwatched item',
     MODE_TURN: 'In order, every item in turn, watched or not',
     MODE_RANDOM: 'Random, any unwatched item',
     MODE_RANDOM_ANY: 'Random, any item, watched or not',
+    MODE_EACH: 'Every show, the next unwatched episode of each',
 }
 MODE_SHORT = {
     MODE_NEXT: 'in order, unwatched',
     MODE_TURN: 'in order, any',
     MODE_RANDOM: 'random, unwatched',
     MODE_RANDOM_ANY: 'random, any',
+    MODE_EACH: 'one episode from each show',
 }
 
 # Whether a random list slot keeps a series in order, an option that is off
@@ -286,6 +293,9 @@ def episode_item(row, group):
         'season': str(row.get('season', '')),
         'episode': str(row.get('episode', '')),
         'engage_playcount': int(row.get('playcount') or 0),
+        # LIST-EACH: the running time in seconds, so a showing's total needs no
+        # further lookups; 0 when the library has none.
+        'engage_runtime': int(row.get('runtime') or 0),
     }
 
 
@@ -344,6 +354,40 @@ def item_label(item):
         except (ValueError, TypeError):
             pass
     return label
+
+
+def all_tv(items):
+    """
+    <summary>
+    Whether a list holds only TV: whole shows, seasons and episodes.
+    </summary>
+    <param name="items">The list's items.</param>
+    <returns>True when there is at least one item and every one is TV.</returns>
+    <remarks>LIST-EACH: the one episode from each show mode is offered only then.</remarks>
+    """
+    return bool(items) and all(item.get('dbtype') in EACH_TYPES for item in items)
+
+
+def each_label(episodes):
+    """
+    <summary>
+    The banner and Coming up line for one showing of a one episode from each show slot.
+    </summary>
+    <param name="episodes">The episode items it will play, in order.</param>
+    <returns>One episode's own label (see item_label) when there is one, otherwise
+    '3 episodes: Voyager S03E04, Babylon 5 S02E10, Doctor Who S01E05'.</returns>
+    """
+    if len(episodes) == 1:
+        return item_label(episodes[0])
+    parts = []
+    for item in episodes:
+        try:
+            parts.append('{} S{:02d}E{:02d}'.format(
+                item.get('show') or item.get('label') or '?',
+                int(item.get('season')), int(item.get('episode'))))
+        except (ValueError, TypeError):
+            parts.append(item.get('show') or item.get('label') or '?')
+    return '{} episodes: {}'.format(len(episodes), ', '.join(parts))
 
 
 def item_identity(item):

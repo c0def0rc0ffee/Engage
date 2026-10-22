@@ -48,7 +48,9 @@ Favourites and library.
   Functional skin (a "Saturday Night Movie" list, say) and choose how each
   showing picks from it: the next unwatched item in the list's order, every item
   in turn whether watched or not (wrapping back to the top after the last), a
-  random unwatched item, or any item at random. The list stays in the skin: add,
+  random unwatched item, or any item at random. A list of TV shows can also play
+  the next unwatched episode of every show in it, back to back as one playlist,
+  so Voyager, Babylon 5 and Doctor Who each get an episode in one evening. The list stays in the skin: add,
   reorder or remove items there and the next showing follows. Once everything in
   a random unwatched list is watched it picks from the whole list again. A plain
   file or plugin item in a list has no watched count Engage can read, so the
