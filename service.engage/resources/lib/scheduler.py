@@ -443,6 +443,9 @@ class EngageScheduler:
         # without this the queue would be fired by our own stop; see
         # _on_playback_ended.
         self._stopping_on_purpose = False
+        # LIST-EACH: True while a one episode from each show playlist Engage
+        # started is playing; see _on_playback_ended.
+        self._each_playing = False
         # A random list slot's pick, keyed by occurrence like the trackers
         # above, so the banner, a snoozed re-prompt and the playback all name
         # the same item. COMING-UP-PICK-AHEAD, 22/10/2026: drawn as soon as
@@ -1019,6 +1022,9 @@ class EngageScheduler:
                 if kept is not None and self._pick_still_good(slot, key, kept):
                     return kept
                 return self._draw_list_pick(slot, key)
+        if slot.list_mode == functional_lists.MODE_EACH:
+            showings = self._each_showings(slot, 1)
+            return self._each_choice(showings[0]) if showings else None
         items = self._flat_items(items)
         if not items:
             return None
@@ -1125,6 +1131,66 @@ class EngageScheduler:
         self._log('Slot {}: drew "{}" for {}'.format(slot.index + 1, choice['label'], key))
         return choice
 
+    def _each_showings(self, slot, count):
+        """
+        <summary>
+        What the coming showings of a one episode from each show slot will play.
+        </summary>
+        <param name="slot">A list slot in MODE_EACH whose list_items are filled.</param>
+        <param name="count">How many showings to work out at most.</param>
+        <returns>Up to count lists of episode items, first showing first; empty when
+        nothing in the list is left to watch.</returns>
+        <remarks>
+        LIST-EACH, 22/10/2026. Each row of the list in order gives its unwatched
+        episodes: a whole show or a season its episodes in order (as _group_episodes
+        has them, Specials left out of a whole show), a single episode itself while it
+        is unwatched. The nth showing takes the nth of each row's, so a row that runs
+        out drops out and the rest carry on; a film or a plain file in the list is
+        passed over. Watched state is the library's at the time of asking, so once a
+        showing has been watched the next one moves up.
+        </remarks>
+        """
+        rows = []
+        for item in slot.list_items:
+            if functional_lists.is_group(item):
+                rows.append([ep for ep in self._group_episodes(item) if not ep.get('engage_playcount')])
+            elif item.get('dbtype') == 'episode':
+                rows.append([] if self._list_item_watched(item) else [item])
+        showings = []
+        for n in range(count):
+            episodes = [row[n] for row in rows if n < len(row)]
+            if not episodes:
+                break
+            showings.append(episodes)
+        return showings
+
+    def _each_choice(self, episodes):
+        """
+        <summary>
+        The choice dict for one showing of a one episode from each show slot.
+        </summary>
+        <param name="episodes">The episode items from _each_showings, in order.</param>
+        <returns>The usual {'spec', 'label', 'art', 'identity', 'index'} with spec None,
+        plus 'playlist', the Player items to queue, and 'runtime', their total in
+        seconds (0 when any one is unknown).</returns>
+        """
+        seconds = []
+        for ep in episodes:
+            runtime = int(ep.get('engage_runtime') or 0)
+            if not runtime:
+                try:
+                    runtime = self._spec_runtime(functional_lists.play_spec(ep))
+                except Exception:
+                    runtime = 0
+            seconds.append(runtime)
+        return {'spec': None,
+                'playlist': [functional_lists.play_spec(ep) for ep in episodes],
+                'label': functional_lists.each_label(episodes),
+                'art': episodes[0].get('thumb') or '',
+                'identity': ['each'] + [list(functional_lists.item_identity(ep)) for ep in episodes],
+                'index': 0,
+                'runtime': sum(seconds) if all(seconds) else 0}
+
     def _group_episodes(self, item):
         """
         <summary>
@@ -1142,7 +1208,7 @@ class EngageScheduler:
         </remarks>
         """
         params = {'properties': ['title', 'file', 'season', 'episode', 'showtitle',
-                                 'art', 'thumbnail', 'playcount']}
+                                 'art', 'thumbnail', 'playcount', 'runtime']}
         if item.get('dbtype') == 'tvshow':
             params['tvshowid'] = int(item['dbid'])
             season = None
@@ -1217,7 +1283,10 @@ class EngageScheduler:
             return cached[1]
         labels = []
         try:
-            if slot.list_mode in functional_lists.RANDOM_MODES:
+            if slot.list_mode == functional_lists.MODE_EACH:
+                labels = [functional_lists.each_label(eps)
+                          for eps in self._each_showings(slot, NEXT_LIST_COUNT)]
+            elif slot.list_mode in functional_lists.RANDOM_MODES:
                 labels = [slot.list_title] * NEXT_LIST_COUNT
             else:
                 items = self._flat_items(slot.list_items)
@@ -1310,6 +1379,9 @@ class EngageScheduler:
         """
         count = NEXT_LIST_COUNT
         if slot.kind == 'list':
+            if slot.list_mode == functional_lists.MODE_EACH:
+                return [self._each_choice(eps)['runtime']
+                        for eps in self._each_showings(slot, count)]
             if slot.list_mode in functional_lists.RANDOM_MODES:
                 return []
             items = self._flat_items(slot.list_items)
@@ -1540,11 +1612,37 @@ class EngageScheduler:
         </summary>
         <param name="choice">A dict from _resolve_list_item.</param>
         """
+        if choice.get('playlist'):
+            self._play_each_playlist(choice['playlist'])
+            return
         response = xbmc.executeJSONRPC(json.dumps({
             'jsonrpc': '2.0', 'method': 'Player.Open',
             'params': {'item': choice['spec']}, 'id': 1
         }))
         self._log('Player.Open list item response: {}'.format(response))
+
+    def _play_each_playlist(self, items):
+        """
+        <summary>
+        Play a one episode from each show showing: its episodes as Kodi's video
+        playlist, from the first.
+        </summary>
+        <param name="items">Player items such as {'episodeid': 12}, in order.</param>
+        <remarks>
+        LIST-EACH, 22/10/2026. Clears the video playlist (id 1), adds the episodes and
+        opens it, and marks the playlist as running so _on_playback_ended does not
+        take the step from one episode to the next for the end of playback.
+        </remarks>
+        """
+        def call(method, params):
+            """<summary>One JSON-RPC call, logged.</summary>"""
+            response = xbmc.executeJSONRPC(json.dumps(
+                {'jsonrpc': '2.0', 'method': method, 'params': params, 'id': 1}))
+            self._log('{} response: {}'.format(method, response))
+        call('Playlist.Clear', {'playlistid': 1})
+        call('Playlist.Add', {'playlistid': 1, 'item': list(items)})
+        self._each_playing = True
+        call('Player.Open', {'item': {'playlistid': 1, 'position': 0}})
 
     def _play_slot(self, slot, key=None):
         """
@@ -1781,6 +1879,42 @@ class EngageScheduler:
             self._stopping_on_purpose = False
             self._log('Playback stopped by Engage itself, the queue is left alone')
             return
+        # LIST-EACH: Kodi can report an end between the episodes of a playlist
+        # Engage started. Wait, and only carry on if nothing is playing then.
+        if self._each_playing:
+            threading.Thread(target=self._each_end_check, daemon=True).start()
+            return
+        self._after_playback_ended()
+
+    def _each_end_check(self):
+        """
+        <summary>
+        Decide whether the end of playback during a one episode from each show
+        playlist is the real end or only the step to its next episode.
+        </summary>
+        <remarks>
+        LIST-EACH, 22/10/2026. Three seconds is long enough for Kodi to have opened
+        the next episode; if something is playing then, the playlist is still going
+        and nothing happens. Otherwise the playlist has finished, or was stopped,
+        and the usual end handling runs: a resume after, or the next queued slot.
+        </remarks>
+        """
+        if self.monitor.waitForAbort(3):
+            return
+        if xbmc.Player().isPlaying():
+            self._log('Playlist moved on to its next episode, not the end of playback')
+            return
+        self._each_playing = False
+        self._after_playback_ended()
+
+    def _after_playback_ended(self):
+        """
+        <summary>
+        What follows the real end of playback: a pending resume, or else the next
+        queued slot.
+        </summary>
+        <remarks>Split out of _on_playback_ended for LIST-EACH, unchanged.</remarks>
+        """
         # Resume-after takes priority over a queued slot.
         if self.resume_after and self._resume_armed:
             info = self.resume_after

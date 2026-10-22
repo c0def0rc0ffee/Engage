@@ -42,6 +42,8 @@ EPISODES = {}
 SEASONS = {}
 EPISODE_PLAYS = {}
 NOTIFIED = []
+# LIST-EACH: what Playlist.Add put on the video playlist.
+PLAYLIST = []
 
 
 def fake_jsonrpc(request):
@@ -57,6 +59,12 @@ def fake_jsonrpc(request):
     method, params = req['method'], req.get('params', {})
     if method == 'Player.Open':
         PLAYED.append(params['item'])
+        return json.dumps({'result': 'OK'})
+    if method == 'Playlist.Clear':
+        del PLAYLIST[:]
+        return json.dumps({'result': 'OK'})
+    if method == 'Playlist.Add':
+        PLAYLIST.extend(params['item'])
         return json.dumps({'result': 'OK'})
     result_keys = {
         'VideoLibrary.GetMovieDetails': ('movieid', 'moviedetails'),
@@ -536,6 +544,53 @@ def show_library():
     SEASONS[20] = {'tvshowid': 4, 'season': 2}
 
 
+def test_each_show():
+    """<summary>LIST-EACH: the next unwatched episode of every show, as one playlist, with names, times and the end guard.</summary>"""
+    LIBRARY.clear()
+    show_library()
+    for row in EPISODES[4]:
+        row['runtime'] = 1200
+    EPISODES[5] = [{'episodeid': 500 + e, 'title': 'Echo{}'.format(e), 'season': 1, 'episode': e,
+                    'showtitle': 'Echo', 'file': '/e/1x{}.mkv'.format(e), 'art': {}, 'runtime': 1500}
+                   for e in (1, 2, 3)]
+    movie(1)
+    delta = item('Delta', dbtype='tvshow', dbid=4, show='Delta')
+    echo = item('Echo', dbtype='tvshow', dbid=5, show='Echo')
+    check(functional_lists.all_tv([delta, echo]), 'two shows are all TV')
+    check(not functional_lists.all_tv([delta, item('Alpha', dbid=1)]), 'a film in the list is not')
+    write_lists([{'name': 'Shows', 'items': [delta, echo, item('Alpha', dbid=1)]}])
+    save_list_slot('Shows', 'each')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    equal(sched._describe_slot(slot)[0], '2 episodes: Delta S01E01, Echo S01E01',
+          'one of each show, in list order, the film passed over')
+    del PLAYED[:]
+    sched._play_slot(slot, 'k')
+    equal(PLAYLIST, [{'episodeid': 111}, {'episodeid': 501}], 'both episodes on the playlist')
+    equal(PLAYED, [{'playlistid': 1, 'position': 0}], 'and the playlist opened from the top')
+    check(sched._each_playing, 'the playlist is marked as running')
+    equal(sched._list_row_labels(slot)[:4],
+          ['2 episodes: Delta S01E01, Echo S01E01', '2 episodes: Delta S01E02, Echo S01E02',
+           '2 episodes: Delta S02E01, Echo S01E03', 'Delta · S02E02, Ep22'],
+          'later showings take the next of each; a show that runs out drops out')
+    equal(sched._lookup_runtimes(slot)[:2], [2700, 2700], 'a showing runs as long as its episodes together')
+
+    playing = {'now': True}
+    real_player = scheduler.xbmc.Player
+    scheduler.xbmc.Player = lambda: types.SimpleNamespace(isPlaying=lambda: playing['now'])
+    try:
+        sched._each_end_check()
+        check(sched._each_playing, 'an end while the next episode is playing is not the end')
+        playing['now'] = False
+        sched._each_end_check()
+        check(not sched._each_playing, 'an end with nothing playing is')
+    finally:
+        scheduler.xbmc.Player = real_player
+    EPISODE_PLAYS.update({111: 1, 501: 1})
+    sched._next_rows_cache.clear()
+    equal(sched._describe_slot(slot)[0], '2 episodes: Delta S01E02, Echo S01E02', 'watched ones move it on')
+
+
 def test_group_rows():
     """<summary>Whole show and season rows: kept, expanded, skipped, and drawn as one entry.</summary>"""
     LIBRARY.clear()
@@ -703,7 +758,7 @@ def test_monthly_occurrences():
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
-                 test_random_any_mode, test_pick_ahead, test_series_pool, test_random_sequels,
+                 test_random_any_mode, test_pick_ahead, test_each_show, test_series_pool, test_random_sequels,
                  test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences,
                  test_bad_numbers):
         print('running {}'.format(test.__name__))
