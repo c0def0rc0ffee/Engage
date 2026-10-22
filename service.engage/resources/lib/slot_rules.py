@@ -264,7 +264,12 @@ def summary_of(slot):
     </remarks>
     """
     from resources.lib import slot_manager
-    return '{} at {}'.format(slot_manager._schedule_text(slot), _readable(slot)['time'])
+    text = '{} at {}'.format(slot_manager._schedule_text(slot), _readable(slot)['time'])
+    # MULTI-TIMES: each extra day and time after the first, as 'Sat at 15:00'.
+    for entry in store.extra_times_of(slot):
+        text += '; {} at {:02d}:{:02d}'.format(slot_manager._extra_days_text(slot, entry),
+                                              entry['hour'], entry['minute'])
+    return text
 
 
 def next_due(slot, now):
@@ -286,17 +291,21 @@ def next_due(slot, now):
     top, because the scheduler pulls in the Kodi player modules.
     </remarks>
     """
-    from resources.lib.scheduler import Slot
-    wrapped = Slot(slot)
+    from resources.lib.scheduler import Slot, slot_facets
     floor = now.replace(second=0, microsecond=0)
-    for offset in range(NEXT_DUE_DAYS):
-        day = floor.date() + timedelta(days=offset)
-        if not wrapped.runs_on(day):
-            continue
-        due = datetime(day.year, day.month, day.day, wrapped.hour, wrapped.minute)
-        if due >= floor:
-            return due
-    return None
+    found = []
+    # MULTI-TIMES: the soonest over the slot's own day and time and each extra one.
+    for facet in slot_facets(slot):
+        wrapped = Slot(facet)
+        for offset in range(NEXT_DUE_DAYS):
+            day = floor.date() + timedelta(days=offset)
+            if not wrapped.runs_on(day):
+                continue
+            due = datetime(day.year, day.month, day.day, wrapped.hour, wrapped.minute)
+            if due >= floor:
+                found.append(due)
+                break
+    return min(found) if found else None
 
 
 def next_text(due, now):

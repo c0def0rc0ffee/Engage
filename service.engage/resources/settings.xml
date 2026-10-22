@@ -5,7 +5,8 @@
   read-only version field, the Manage slots action button, debug logging, the
   poll interval, the catch-up window and its prompt cap, the recent watch
   window, the master banner style, the one-shot test mode, the favourites filter
-  switch and the switch for the add-on API that the JellyStat dashboard uses.
+  switch, the switch for the add-on API that the JellyStat dashboard uses, and
+  the hidden sort order of the Manage slots window.
   Labels are plain text; the add-on ships no strings.po.
   </summary>
 -->
@@ -18,6 +19,9 @@
     <setting type="sep"/>
     <setting label="Manage slots..." type="action" action="RunScript(special://home/addons/service.engage/script.py,manage_slots)" option="close"/>
     <setting type="sep"/>
+    <!-- Hidden. The order the Manage slots window last sorted by, one of the
+         ids in SORTS in resources/lib/slots_window.py. -->
+    <setting id="slots_sort" type="text" label="Slots sort" default="next" visible="false"/>
     <setting id="debug" type="bool" label="Enable debug logging" default="false"/>
     <setting id="poll_interval" type="slider" label="Poll interval (seconds)" default="30" range="5,5,120" option="int"/>
     <setting id="catchup_hours" type="slider" label="Catch-up window for missed slots (hours, 0 = off)" default="6" range="0,1,12" option="int"/>

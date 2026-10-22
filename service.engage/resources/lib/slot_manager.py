@@ -175,8 +175,49 @@ def _slot_line(slot):
 def manage_slots():
     """
     <summary>
-    Top-level slot list. Loops until the user backs out.
+    Manage slots: the full screen window, or the plain list when that cannot open.
     </summary>
+    <remarks>
+    SLOTS-WINDOW, 22/10/2026: the window (slots_window.py) sorts and shows every
+    slot; the plain select list below stays as the fallback, so a skin that cannot
+    draw the window still leaves the slots manageable.
+    </remarks>
+    """
+    from resources.lib import slots_window
+    if slots_window.open_slots_window():
+        return
+    _manage_slots_list()
+
+
+def add_slot_menu():
+    """
+    <summary>
+    The four ways to add a slot, as one menu, for the window's Add slot button.
+    </summary>
+    <remarks>
+    The same four entries and functions as the plain list's add lines. Backing out
+    adds nothing.
+    </remarks>
+    """
+    choices = [
+        ('Single show or film (a favourite)...', _add_slot),
+        ('Film sequence...', _add_sequence),
+        ('Binge order (crossover)...', _add_binge),
+        ('From a Functional skin list...', _add_list_slot),
+    ]
+    idx = xbmcgui.Dialog().select('Add a slot', [label for label, _ in choices])
+    if idx >= 0:
+        choices[idx][1]()
+
+
+def _manage_slots_list():
+    """
+    <summary>
+    Top-level slot list as a plain select dialog. Loops until the user backs out.
+    </summary>
+    <remarks>
+    The original Manage slots screen, kept as manage_slots' fallback.
+    </remarks>
     """
     while True:
         slots = store.load_slots()
@@ -778,6 +819,7 @@ def _edit_slot(slot_id):
             'Repeats: {}'.format(_schedule_text(s, with_date=False)),
             'One-shot date: {}'.format(s.get('date') or '(none, uses the repeat)'),
             'Time: {:02d}:{:02d}'.format(s.get('hour', 0), s.get('minute', 0)),
+            'More days and times: {}...'.format(_extra_times_summary(s)),
             'Warning minutes: {}'.format(s.get('warning', 5)),
             'When the countdown ends: {}'.format(
                 store.TIMEOUT_ACTION_SHORT[store.timeout_action_of(s)]),
@@ -786,12 +828,27 @@ def _edit_slot(slot_id):
             'Skip the banner, just play at the set time: {}'.format(
                 'yes' if s.get('autoopen') else 'no'),
             'Allow snooze: {}'.format('yes' if s.get('snooze') else 'no'),
+            'Ends At line after it (Functional skin, Coming up list): {}'.format(
+                'on' if store.ends_at_of(s) else 'off'),
+        ]
+        # ROW-ITEM: a list slot only. Inserted here, so the entries below it move
+        # down one and are moved back before the dispatch.
+        if is_list:
+            options.append('Coming up names (Functional skin): {}'.format(
+                'what it will play' if store.row_item_of(s) else 'the list'))
+        options += [
             'Duplicate slot',
             '[COLOR red]Delete slot[/COLOR]',
         ]
         idx = xbmcgui.Dialog().select('Edit: {}'.format(name), options)
         if idx < 0:
             return
+        if is_list and idx == 13:
+            s['row_item'] = not store.row_item_of(s)
+            store.save_slots(slots)
+            continue
+        if is_list and idx > 13:
+            idx -= 1
 
         if idx == 0:
             s['enabled'] = not s.get('enabled')
@@ -832,22 +889,26 @@ def _edit_slot(slot_id):
             if t is not None:
                 s['hour'], s['minute'] = t
         elif idx == 6:
+            _edit_extra_times(s)
+        elif idx == 7:
             warn = _pick_warning(s.get('warning', 5))
             if warn is not None:
                 s['warning'] = warn
-        elif idx == 7:
+        elif idx == 8:
             action = _pick_timeout_action(store.timeout_action_of(s))
             if action is not None:
                 s['timeout_action'] = action
-        elif idx == 8:
+        elif idx == 9:
             style = _pick_banner_style(store.banner_style_of(s))
             if style is not None:
                 s['banner_style'] = style
-        elif idx == 9:
-            s['autoopen'] = not s.get('autoopen')
         elif idx == 10:
-            s['snooze'] = not s.get('snooze')
+            s['autoopen'] = not s.get('autoopen')
         elif idx == 11:
+            s['snooze'] = not s.get('snooze')
+        elif idx == 12:
+            s['ends_at'] = not store.ends_at_of(s)
+        elif idx == 13:
             import copy
             dup = copy.deepcopy(s)
             dup['id'] = store.next_id(slots)
@@ -856,7 +917,7 @@ def _edit_slot(slot_id):
             store.save_slots(slots)
             _notify('Duplicated slot')
             continue
-        elif idx == 12:
+        elif idx == 14:
             if xbmcgui.Dialog().yesno('Engage', 'Delete "{}"?'.format(name)):
                 slots = [x for x in slots if x.get('id') != slot_id]
                 store.save_slots(slots)
@@ -866,6 +927,85 @@ def _edit_slot(slot_id):
             continue
 
         store.save_slots(slots)
+
+
+def _extra_days_text(slot, entry):
+    """
+    <summary>
+    The days part of one extra day and time, for the slot's summary.
+    </summary>
+    <param name="slot">The slot it belongs to.</param>
+    <param name="entry">One entry from slots.extra_times_of.</param>
+    <returns>'Mon,Wed' or 'Every day' for a weekly or every few weeks slot; 'also'
+    for a monthly, yearly or one shot slot, where only the time counts.</returns>
+    """
+    if slot.get('date') or store.repeat_of(slot) in (store.REPEAT_MONTHLY, store.REPEAT_YEARLY):
+        return 'also'
+    return _days_abbrev(entry['days'])
+
+
+def _extra_times_summary(slot):
+    """
+    <summary>
+    The edit menu's word for a slot's extra days and times.
+    </summary>
+    <param name="slot">The slot.</param>
+    <returns>'none', or the entries as 'Sat 15:00, Sun 21:30'.</returns>
+    """
+    entries = store.extra_times_of(slot)
+    if not entries:
+        return 'none'
+    return ', '.join('{} {:02d}:{:02d}'.format(_extra_days_text(slot, e), e['hour'], e['minute'])
+                     for e in entries)
+
+
+def _edit_extra_times(slot):
+    """
+    <summary>
+    Add, change and remove the days and times a slot runs at beyond its first.
+    </summary>
+    <param name="slot">The slot being edited; its extra_times is replaced in place.
+    The caller saves it.</param>
+    <remarks>
+    MULTI-TIMES, 22/10/2026. Loops until Back. Choosing an entry offers to change its
+    days, change its time or remove it; the last line adds one, asking for its days
+    and then its time, and backing out of either adds nothing. For a monthly, yearly
+    or one shot slot the days are still asked for but only the time is used, which
+    the summary says by reading 'also'.
+    </remarks>
+    """
+    while True:
+        entries = store.extra_times_of(slot)
+        lines = ['{} at {:02d}:{:02d}'.format(_extra_days_text(slot, e), e['hour'], e['minute'])
+                 for e in entries]
+        lines.append('+ Add another day and time...')
+        idx = xbmcgui.Dialog().select('More days and times (first: {} at {:02d}:{:02d})'.format(
+            _schedule_text(slot), slot.get('hour', 0), slot.get('minute', 0)), lines)
+        if idx < 0:
+            return
+        if idx == len(entries):
+            days = _pick_days(slot.get('days') or [])
+            if days is None:
+                continue
+            t = _pick_time(slot.get('hour', 19), slot.get('minute', 0))
+            if t is None:
+                continue
+            entries.append({'days': days, 'hour': t[0], 'minute': t[1]})
+        else:
+            entry = entries[idx]
+            what = xbmcgui.Dialog().select(lines[idx], ['Change days', 'Change time',
+                                                        '[COLOR red]Remove[/COLOR]'])
+            if what == 0:
+                days = _pick_days(entry['days'])
+                if days is not None:
+                    entry['days'] = days
+            elif what == 1:
+                t = _pick_time(entry['hour'], entry['minute'])
+                if t is not None:
+                    entry['hour'], entry['minute'] = t
+            elif what == 2:
+                entries.pop(idx)
+        slot['extra_times'] = entries
 
 
 def _safe_day_index(day):
