@@ -170,6 +170,8 @@ never shown.
 |---|---|---|
 | `Engage.Next.1.Label` to `Engage.Next.22.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
 | `Engage.Next.1.When` to `Engage.Next.22.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
+| `Engage.Next.1.Due` to `Engage.Next.22.Due` | When it is due, as `YYYY-MM-DDTHH:MM` for a skin to calculate with | `2026-10-22T19:00` |
+| `Engage.Next.1.Runtime` to `Engage.Next.22.Runtime` | How long what it will play runs, in whole seconds; empty when that cannot be known, such as a random list pick not yet drawn, a plain file or a plugin | `2640` |
 
 ## For developers
 

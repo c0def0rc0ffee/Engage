@@ -80,7 +80,13 @@ NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
 # COMING-UP-MORE, 21/10/2026: 22, up from 11, so Functional's 22 line list can
 # fill when several slots share a day and each takes one line instead of two.
 NEXT_LIST_COUNT = 22
-NEXT_LIST_NAMES = ('When', 'Label')
+# COMING-UP-RUNTIME, 22/10/2026: each row also carries Due, the occurrence as
+# 'YYYY-MM-DDTHH:MM', and Runtime, how long what it will play runs in whole
+# seconds, empty when that cannot be known (a random list pick not yet drawn,
+# a plain file, a plugin or a library item with no duration). Functional uses
+# them to work out when a slot queued behind another will really start. They
+# come before When and Label, so Label is still written last and cleared first.
+NEXT_LIST_NAMES = ('Due', 'Runtime', 'When', 'Label')
 # How far ahead the next occurrence is looked for. Today plus seven days, so a
 # weekly slot already dealt with today still has a next occurrence (the same
 # weekday next week) rather than vanishing from the skin for the evening.
@@ -150,7 +156,8 @@ def next_property_order(values):
     <returns>A list of names: the single set, then the numbered rows.</returns>
     <remarks>
     Publishing: the single set in NEXT_PROPERTY_NAMES order (Label last), then the
-    rows from NEXT_LIST_COUNT down to 1, each When then Label. Clearing: the
+    rows from NEXT_LIST_COUNT down to 1, each in NEXT_LIST_NAMES order (Due,
+    Runtime, When, Label). Clearing: the
     single set reversed (Label first, as it always has been), then rows 1 upwards,
     each Label first, so each group is cleared in the reverse of its publish order.
     A row with no Label in values is being cleared, so it takes the clearing order
@@ -390,8 +397,15 @@ class EngageScheduler:
         self._stopping_on_purpose = False
         # A random list slot's pick, keyed by occurrence like the trackers
         # above, so the banner, a snoozed re-prompt and the playback all name
-        # the same item. Purged with them when the day rolls over.
-        self._list_picks = {}
+        # the same item. COMING-UP-PICK-AHEAD, 22/10/2026: drawn as soon as
+        # the occurrence is in the Coming up rows, kept in list_picks.json so
+        # a restart does not draw again, and dropped once its day has gone.
+        from resources.lib import slots as slot_store
+        self._list_picks = slot_store.get_list_picks()
+        # Picks checked against the library and the list since the caches were
+        # last cleared; see _pick_still_good.
+        self._picks_checked = set()
+        self._picks_lock = threading.RLock()
         self._player = _EngagePlayerMonitor(self)
         # Next-slot publishing for skins. The cache holds each slot's episode
         # line and poster, keyed by slot id, so the library is asked once per
@@ -405,6 +419,9 @@ class EngageScheduler:
         # The Coming up row labels of each list slot, keyed and signed like
         # _next_item_cache and cleared with it; see _list_row_labels.
         self._next_rows_cache = {}
+        # The running time of each coming showing of a slot, keyed, signed and
+        # cleared like the two above; see _slot_runtimes.
+        self._next_runtime_cache = {}
         self._publish_lock = threading.Lock()
         self._gui_ready = False
 
@@ -923,8 +940,11 @@ class EngageScheduler:
         picks among all of them every time. Either random pick is stored
         under the key and reused for that occurrence, so a snoozed banner comes back with
         the same film and Start plays the one the banner named. Without a key no pick is
-        made, because the skin's Coming up block runs ahead of the banner and a pick made
-        there would be forgotten on a restart; the describer shows 'Random pick' instead.
+        made and the describer shows 'Random pick'. Since COMING-UP-PICK-AHEAD
+        (22/10/2026) the Coming up rows ask with each occurrence's key, so the pick is
+        drawn when the occurrence first shows there; picks are kept in list_picks.json
+        so a restart does not draw again, and a kept one is checked by _pick_still_good
+        before it is used (see _draw_list_pick).
         The in turn mode needs no key: its place only moves when _play_slot records a
         play, so the banner and the playback name the same item anyway.
         With the slot's sequels option on, either random draw offers only the next
@@ -943,36 +963,11 @@ class EngageScheduler:
         if slot.list_mode in functional_lists.RANDOM_MODES:
             if key is None:
                 return None
-            if key in self._list_picks:
-                return self._list_picks[key]
-            groups = {i: self._group_episodes(it) for i, it in enumerate(items)
-                      if functional_lists.is_group(it)}
-            pool = [i for i in range(len(items)) if groups.get(i, True)]
-            if not pool:
-                return None
-            unwatched = []
-            if slot.list_mode == functional_lists.MODE_RANDOM:
-                unwatched = [i for i in pool if not self._list_item_watched(items[i])]
-                pool = unwatched or pool
-            series = {}
-            if slot.list_sequels != functional_lists.SEQUELS_OFF:
-                from resources.lib import slots as slot_store
-                series = self._list_series(items, slot.list_sequels)
-                # The unwatched draw takes each series' earliest unwatched film;
-                # a draw over everything walks each series from where it got to.
-                progress = None if unwatched else slot_store.get_series_progress(slot.id)
-                pool = functional_lists.series_pool(items, pool, series, progress) or pool
-            index = random.choice(pool)
-            if index in groups:
-                episodes = groups[index]
-                if slot.list_mode == functional_lists.MODE_RANDOM:
-                    episodes = [ep for ep in episodes if not self._list_item_watched(ep)] or episodes
-                choice = self._list_choice(random.choice(episodes), index)
-            else:
-                choice = self._list_choice(items[index], index)
-            choice['series'] = functional_lists.series_position(items, series, index)
-            self._list_picks[key] = choice
-            return choice
+            with self._picks_lock:
+                kept = self._list_picks.get(key)
+                if kept is not None and self._pick_still_good(slot, key, kept):
+                    return kept
+                return self._draw_list_pick(slot, key)
         items = self._flat_items(items)
         if not items:
             return None
@@ -984,6 +979,100 @@ class EngageScheduler:
             if not self._list_item_watched(item):
                 return self._list_choice(item, index)
         return None
+
+    def _pick_still_good(self, slot, key, pick):
+        """
+        <summary>
+        Whether a kept random pick can still be played for its occurrence.
+        </summary>
+        <param name="slot">The random list slot.</param>
+        <param name="key">The occurrence key the pick was drawn for.</param>
+        <param name="pick">The kept choice dict.</param>
+        <returns>True to keep it; False to draw again.</returns>
+        <remarks>
+        COMING-UP-PICK-AHEAD, 22/10/2026. A pick drawn days ahead can go stale: the
+        list was edited and the row it came from (the item itself, or the whole show
+        or season it was drawn from) is no longer at that place in it, or, for the
+        unwatched mode, the item has been watched since. A snoozed occurrence keeps
+        its pick whatever, so the banner that comes back names the same film. The
+        answer is remembered in _picks_checked until the next library change or slot
+        save clears it, so the Coming up publisher does not ask the library every
+        tick.
+        </remarks>
+        """
+        if key in self.snoozed or key in self._picks_checked:
+            return True
+        items = slot.list_items
+        index = pick.get('index')
+        good = (isinstance(index, int) and 0 <= index < len(items)
+                and list(functional_lists.item_identity(items[index])) == list(pick.get('row') or []))
+        if good and slot.list_mode == functional_lists.MODE_RANDOM:
+            item = dict(pick.get('item') or {})
+            item.pop('engage_playcount', None)
+            good = bool(item) and not self._list_item_watched(item)
+        if good:
+            self._picks_checked.add(key)
+        else:
+            self._log('Slot {}: the pick kept for {} is no longer good, drawing again'.format(
+                slot.index + 1, key))
+        return good
+
+    def _draw_list_pick(self, slot, key):
+        """
+        <summary>
+        Draw, keep and return a random list slot's pick for one occurrence.
+        </summary>
+        <param name="slot">The random list slot.</param>
+        <param name="key">The occurrence key.</param>
+        <returns>The choice dict, or None when the list has nothing to play.</returns>
+        <remarks>
+        Called with _picks_lock held; the draw itself is the one _resolve_list_item
+        describes. COMING-UP-PICK-AHEAD, 22/10/2026: each occurrence draws on its
+        own, as at the banner, so two coming showings can draw the same item. In the
+        unwatched mode that sorts itself out: once the first is watched the later
+        pick is stale (_pick_still_good) and drawn again. The pick
+        carries the list item it came from, for _pick_still_good, and is written to
+        list_picks.json straight away.
+        </remarks>
+        """
+        items = slot.list_items
+        groups = {i: self._group_episodes(it) for i, it in enumerate(items)
+                  if functional_lists.is_group(it)}
+        pool = [i for i in range(len(items)) if groups.get(i, True)]
+        if not pool:
+            return None
+        unwatched = []
+        if slot.list_mode == functional_lists.MODE_RANDOM:
+            unwatched = [i for i in pool if not self._list_item_watched(items[i])]
+            pool = unwatched or pool
+        series = {}
+        if slot.list_sequels != functional_lists.SEQUELS_OFF:
+            from resources.lib import slots as slot_store
+            series = self._list_series(items, slot.list_sequels)
+            # The unwatched draw takes each series' earliest unwatched film;
+            # a draw over everything walks each series from where it got to.
+            progress = None if unwatched else slot_store.get_series_progress(slot.id)
+            pool = functional_lists.series_pool(items, pool, series, progress) or pool
+        index = random.choice(pool)
+        if index in groups:
+            episodes = groups[index]
+            if slot.list_mode == functional_lists.MODE_RANDOM:
+                episodes = [ep for ep in episodes if not self._list_item_watched(ep)] or episodes
+            picked = random.choice(episodes)
+        else:
+            picked = items[index]
+        choice = self._list_choice(picked, index)
+        choice['item'] = picked
+        choice['row'] = list(functional_lists.item_identity(items[index]))
+        choice['identity'] = list(choice['identity'])
+        at = functional_lists.series_position(items, series, index)
+        choice['series'] = list(at) if at else at
+        self._list_picks[key] = choice
+        self._picks_checked.add(key)
+        from resources.lib import slots as slot_store
+        slot_store.set_list_picks(self._list_picks)
+        self._log('Slot {}: drew "{}" for {}'.format(slot.index + 1, choice['label'], key))
+        return choice
 
     def _group_episodes(self, item):
         """
@@ -1098,6 +1187,202 @@ class EngageScheduler:
             labels = []
         self._next_rows_cache[slot.id] = (signature, labels)
         return labels
+
+    def _spec_runtime(self, spec):
+        """
+        <summary>
+        How long one library item runs, from its play spec.
+        </summary>
+        <param name="spec">A Player.Open item such as {'movieid': 3}, or None.</param>
+        <returns>Whole seconds, or 0 when the spec is a plain file, a plugin path or
+        None, or when the library holds no duration for the item.</returns>
+        <remarks>
+        A film, episode or music video gives its runtime, falling back to the
+        duration of its first video stream when the scraper left the runtime empty;
+        a song gives its duration.
+        </remarks>
+        """
+        lookups = {
+            'movieid': ('VideoLibrary.GetMovieDetails', 'moviedetails'),
+            'episodeid': ('VideoLibrary.GetEpisodeDetails', 'episodedetails'),
+            'musicvideoid': ('VideoLibrary.GetMusicVideoDetails', 'musicvideodetails'),
+            'songid': ('AudioLibrary.GetSongDetails', 'songdetails'),
+        }
+        for id_key, (method, result_key) in lookups.items():
+            if spec and id_key in spec:
+                fields = ['duration'] if id_key == 'songid' else ['runtime', 'streamdetails']
+                data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                    'jsonrpc': '2.0', 'method': method,
+                    'params': {id_key: spec[id_key], 'properties': fields}, 'id': 1
+                })))
+                return self._details_runtime(data.get('result', {}).get(result_key) or {})
+        return 0
+
+    def _details_runtime(self, details):
+        """
+        <summary>
+        The running time held in one library details dict.
+        </summary>
+        <param name="details">A movie, episode, music video or song dict from JSON-RPC.</param>
+        <returns>Whole seconds, 0 when there is none.</returns>
+        """
+        for value in (details.get('runtime'), details.get('duration')):
+            try:
+                if int(value or 0) > 0:
+                    return int(value)
+            except (TypeError, ValueError):
+                pass
+        video = ((details.get('streamdetails') or {}).get('video') or [{}])[0] or {}
+        try:
+            return max(0, int(video.get('duration') or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _lookup_runtimes(self, slot):
+        """
+        <summary>
+        The running time of each coming showing of a slot, first to last, asked of
+        the library.
+        </summary>
+        <param name="slot">The slot.</param>
+        <returns>Up to NEXT_LIST_COUNT whole seconds, 0 where a showing's length is
+        unknown; empty when none can be known.</returns>
+        <remarks>
+        Each showing plays what the one before left next, so the nth showing is the
+        nth item the slot would play: a TV favourite's nth unwatched episode, in the
+        order _get_next_unwatched uses; a film favourite's film every time; a
+        sequence's nth unwatched item; an in order list's nth unwatched item, or the
+        nth from where an in turn list got to. A random list cannot be known until
+        the pick is drawn (see _publish_next), and any other favourite (a folder, a
+        playlist, a plugin, a file) has no library length, so they give nothing.
+        </remarks>
+        """
+        count = NEXT_LIST_COUNT
+        if slot.kind == 'list':
+            if slot.list_mode in functional_lists.RANDOM_MODES:
+                return []
+            items = self._flat_items(slot.list_items)
+            if not items:
+                return []
+            if slot.list_mode == functional_lists.MODE_TURN:
+                from resources.lib import slots as slot_store
+                start = functional_lists.turn_index(items, slot_store.get_list_progress(slot.id))
+                chosen = [items[(start + n) % len(items)] for n in range(count)]
+            else:
+                chosen = []
+                for item in items:
+                    if len(chosen) == count:
+                        break
+                    if not self._list_item_watched(item):
+                        chosen.append(item)
+            return [self._spec_runtime(functional_lists.play_spec(item)) for item in chosen]
+        if slot.kind == 'sequence':
+            runtimes = []
+            for entry in slot.items:
+                if len(runtimes) == count:
+                    break
+                item_id = entry.get('id')
+                if not item_id:
+                    continue
+                if entry.get('type', 'movie') == 'episode':
+                    method, id_key, result_key = ('VideoLibrary.GetEpisodeDetails', 'episodeid',
+                                                  'episodedetails')
+                else:
+                    method, id_key, result_key = ('VideoLibrary.GetMovieDetails', 'movieid',
+                                                  'moviedetails')
+                data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                    'jsonrpc': '2.0', 'method': method,
+                    'params': {id_key: item_id,
+                               'properties': ['playcount', 'runtime', 'streamdetails']},
+                    'id': 1
+                })))
+                details = data.get('result', {}).get(result_key)
+                if details and int(details.get('playcount', 0) or 0) == 0:
+                    runtimes.append(self._details_runtime(details))
+            return runtimes
+        fav = next((f for f in self._get_favourites_raw()
+                    if f.get('title', '').lower() == slot.favourite.lower()), None)
+        if not fav:
+            return []
+        tvshowid = self._extract_tvshowid(fav)
+        if tvshowid is not None:
+            data = json.loads(xbmc.executeJSONRPC(json.dumps({
+                'jsonrpc': '2.0', 'method': 'VideoLibrary.GetEpisodes',
+                'params': {'tvshowid': tvshowid,
+                           'properties': ['season', 'episode', 'runtime', 'streamdetails'],
+                           'filter': {'field': 'playcount', 'operator': 'is', 'value': '0'}},
+                'id': 1
+            })))
+            episodes = data.get('result', {}).get('episodes', []) or []
+            episodes.sort(key=lambda e: (e.get('season', 0) == 0, e.get('season', 0),
+                                         e.get('episode', 0)))
+            return [self._details_runtime(ep) for ep in episodes[:count]]
+        movieid = self._extract_movieid(fav)
+        if movieid is not None:
+            return [self._spec_runtime({'movieid': movieid})] * count
+        return []
+
+    def _slot_runtimes(self, slot):
+        """
+        <summary>
+        _lookup_runtimes with a per slot cache, for the next-slot publisher.
+        </summary>
+        <param name="slot">The slot.</param>
+        <returns>The same list _lookup_runtimes returns.</returns>
+        <remarks>
+        Signed like _next_item_cached and cleared with it, so a library change, a
+        watched episode or a slot save looks again. A lookup failure is logged and
+        cached as nothing known, and the rows then go out without a Runtime.
+        </remarks>
+        """
+        signature = self._slot_signature(slot)
+        cached = self._next_runtime_cache.get(slot.id)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        try:
+            runtimes = self._lookup_runtimes(slot)
+        except Exception as e:
+            self._log('Slot {}: Coming up running times for the skin failed: {}'.format(
+                slot.index + 1, e), xbmc.LOGWARNING)
+            runtimes = []
+        self._next_runtime_cache[slot.id] = (signature, runtimes)
+        return runtimes
+
+    def _row_runtime(self, slot, nth, key):
+        """
+        <summary>
+        The Runtime of one numbered Coming up row, in whole seconds.
+        </summary>
+        <param name="slot">The slot due in that row.</param>
+        <param name="nth">How many earlier rows the same slot already has, 0 for its
+        first.</param>
+        <param name="key">The row's occurrence key.</param>
+        <returns>Seconds, 0 when unknown.</returns>
+        <remarks>
+        A random list slot draws its pick for the occurrence here, ahead of the banner
+        (COMING-UP-PICK-AHEAD), through _resolve_list_item, which keeps it; the
+        pick's length is then remembered on the pick itself, so it is asked for once.
+        </remarks>
+        """
+        if slot.kind == 'list' and slot.list_mode in functional_lists.RANDOM_MODES:
+            try:
+                pick = self._resolve_list_item(slot, key)
+            except Exception as e:
+                self._log('Slot {}: drawing the pick ahead failed: {}'.format(
+                    slot.index + 1, e), xbmc.LOGWARNING)
+                pick = None
+            if not pick:
+                return 0
+            if 'runtime' not in pick:
+                try:
+                    pick['runtime'] = self._spec_runtime(pick.get('spec'))
+                except Exception as e:
+                    self._log('Slot {}: running time of the random pick failed: {}'.format(
+                        slot.index + 1, e), xbmc.LOGWARNING)
+                    pick['runtime'] = 0
+            return pick['runtime']
+        runtimes = self._slot_runtimes(slot)
+        return runtimes[nth] if nth < len(runtimes) else 0
 
     def _row_label(self, slot, nth):
         """
@@ -1217,6 +1502,7 @@ class EngageScheduler:
                     # cache is dropped; the next tick then shows the one after.
                     self._next_item_cache.pop(slot.id, None)
                     self._next_rows_cache.pop(slot.id, None)
+                    self._next_runtime_cache.pop(slot.id, None)
                 if item.get('series'):
                     from resources.lib import slots as slot_store
                     group, identity, position = item['series']
@@ -2021,7 +2307,8 @@ class EngageScheduler:
         when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
         Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
         numbered rows, each with its own Label and When and no episode line, so a
-        skin's list shows titles only; a number with no occurrence is cleared. A row's
+        skin's list shows titles only, plus Due and Runtime (see _row_runtime) for a
+        skin that works out queued start times; a number with no occurrence is cleared. A row's
         Label is the slot's label, except for a Functional list slot, where it is the
         list's name for a random slot and the item due to play for an in order one
         (see _row_label), so only list slots ask the library for the rows. Each property is written only
@@ -2060,11 +2347,14 @@ class EngageScheduler:
                     'Count': str(len(slots)),
                 }
                 shown = {}
-                for number, (row_due, _, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
+                for number, (row_due, row_key, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
                     nth = shown.get(row_slot.id, 0)
                     shown[row_slot.id] = nth + 1
                     values['{}.Label'.format(number)] = self._row_label(row_slot, nth)
                     values['{}.When'.format(number)] = when_label(row_due, now)
+                    values['{}.Due'.format(number)] = row_due.strftime('%Y-%m-%dT%H:%M')
+                    seconds = self._row_runtime(row_slot, nth, row_key)
+                    values['{}.Runtime'.format(number)] = str(seconds) if seconds else ''
                 self._write_next_properties(values, reason)
             except Exception:
                 import traceback
@@ -2153,15 +2443,21 @@ class EngageScheduler:
         if sender == ADDON_ID and method == 'Other.' + SLOTS_SAVED_MESSAGE:
             self._next_item_cache.clear()
             self._next_rows_cache.clear()
+            self._next_runtime_cache.clear()
+            self._picks_checked.clear()
             self._publish_async('slots saved')
             return
         if method in ('VideoLibrary.OnScanFinished', 'VideoLibrary.OnCleanFinished'):
             self._next_item_cache.clear()
             self._next_rows_cache.clear()
+            self._next_runtime_cache.clear()
+            self._picks_checked.clear()
             self._publish_async(method)
         elif method in ('VideoLibrary.OnUpdate', 'VideoLibrary.OnRemove'):
             self._next_item_cache.clear()
             self._next_rows_cache.clear()
+            self._next_runtime_cache.clear()
+            self._picks_checked.clear()
             if method == 'VideoLibrary.OnUpdate' and '"playcount"' in (data or ''):
                 self._publish_async('watched state changed')
 
@@ -2379,8 +2675,17 @@ class EngageScheduler:
         for tracker in (self.triggered, self.warned, self.cancelled):
             for key in [k for k in tracker if k[:10] not in keep_dates]:
                 del tracker[key]
-        for key in [k for k in self._list_picks if k[:10] not in keep_dates and k not in self.snoozed]:
-            del self._list_picks[key]
+        # COMING-UP-PICK-AHEAD: a pick for a day still to come stays; only one
+        # whose day has gone (and is not snoozed) is dropped, and the file then
+        # rewritten. ISO dates sort as strings.
+        earliest = min(keep_dates)
+        with self._picks_lock:
+            spent = [k for k in self._list_picks if k[:10] < earliest and k not in self.snoozed]
+            for key in spent:
+                del self._list_picks[key]
+            if spent:
+                from resources.lib import slots as slot_store
+                slot_store.set_list_picks(self._list_picks)
 
     def _process_slot(self, slot, now):
         """

@@ -208,6 +208,7 @@ def save_list_slot(name, mode, slot_id=1, sequels=None):
 
 def make_scheduler():
     """<summary>An EngageScheduler ready for the list checks.</summary>"""
+    store.set_list_picks({})  # COMING-UP-PICK-AHEAD: picks persist, so each scheduler starts with none
     sched = scheduler.EngageScheduler()
     sched._gui_ready = True
     return sched
@@ -325,6 +326,43 @@ def test_random_mode():
     movie(3, playcount=1)
     label, _ = sched._describe_slot(slot, '2026-10-18-1-2000')
     check(label in ('Alpha', 'Bravo', 'Charlie'), 'all watched still picks something')
+
+
+def test_pick_ahead():
+    """<summary>COMING-UP-PICK-AHEAD: a random pick is kept across a restart, kept for days to come, and drawn again when stale.</summary>"""
+    LIBRARY.clear()
+    movie(1)
+    movie(2)
+    movie(3)
+    write_lists([{'name': 'Films', 'items': [item('Alpha', dbid=1), item('Bravo', dbid=2),
+                                             item('Charlie', dbid=3)]}])
+    save_list_slot('Films', 'random')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    today, saturday = '2026-10-22-1-1900', '2026-10-24-1-1900'
+    first = sched._describe_slot(slot, saturday)[0]
+    check(first in ('Alpha', 'Bravo', 'Charlie'), 'Saturday is drawn days ahead')
+    equal(set(store.get_list_picks()), {saturday}, 'and kept in list_picks.json')
+
+    restarted = scheduler.EngageScheduler()
+    slot = restarted._reload_slots()[0]
+    equal(restarted._describe_slot(slot, saturday)[0], first, 'a restart names the same pick')
+
+    restarted._describe_slot(slot, today)
+    restarted._purge_trackers(datetime(2026, 10, 23, 12, 0))
+    equal(set(restarted._list_picks), {saturday}, 'the day after, a spent pick goes and Saturday stays')
+    equal(set(store.get_list_picks()), {saturday}, 'and the file says the same')
+
+    movie({'Alpha': 1, 'Bravo': 2, 'Charlie': 3}[first], playcount=1)
+    restarted._picks_checked.clear()  # what a library change does
+    again = restarted._describe_slot(slot, saturday)[0]
+    check(again != first, 'a pick watched since it was drawn is drawn again')
+
+    write_lists([{'name': 'Films', 'items': [item('Delta', dbid=4)]}])
+    movie(4)
+    slot = restarted._reload_slots()[0]
+    restarted._picks_checked.clear()
+    equal(restarted._describe_slot(slot, saturday)[0], 'Delta', 'a list edited under the pick draws again')
 
 
 def test_random_any_mode():
@@ -650,7 +688,7 @@ def test_monthly_occurrences():
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
-                 test_random_any_mode, test_series_pool, test_random_sequels,
+                 test_random_any_mode, test_pick_ahead, test_series_pool, test_random_sequels,
                  test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences,
                  test_bad_numbers):
         print('running {}'.format(test.__name__))
