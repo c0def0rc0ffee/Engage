@@ -604,6 +604,21 @@ def test_row_labels():
     other = scheduler.Slot(dict(store.new_slot(favourite='Voyager'), label='Voyager'))
     equal(sched._row_label(other, 0), 'Voyager', 'a favourite slot keeps its label')
 
+    # ROW-ITEM: the slot's own choice beats the mode's default.
+    data = save_list_slot('Saturday Night Movie', 'random')
+    data['row_item'] = True
+    store.save_slots([data])
+    slot = sched._reload_slots()[0]
+    named = sched._row_label(slot, 0, '2026-10-24-1-2000')
+    check(named in ('Bravo', 'Charlie'), 'random set to name what it plays: the drawn film, ' + named)
+    equal(sched._row_label(slot, 0, '2026-10-24-1-2000'), named, 'and the same film every time')
+    equal(sched._describe_slot(slot, '2026-10-24-1-2000')[0], named, 'which is the film the banner names')
+    data = save_list_slot('Saturday Night Movie', 'next')
+    data['row_item'] = False
+    store.save_slots([data])
+    slot = sched._reload_slots()[0]
+    equal(sched._row_label(slot, 0), 'Saturday Night Movie', 'in order set to name the list: the list')
+
 
 # --- Repeats -----------------------------------------------------------------------
 

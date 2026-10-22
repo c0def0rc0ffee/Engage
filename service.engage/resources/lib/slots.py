@@ -273,6 +273,83 @@ def timeout_action_of(slot):
     return action if action in TIMEOUT_ACTIONS else DEFAULT_TIMEOUT_ACTION
 
 
+def extra_times_of(slot):
+    """
+    <summary>
+    The days and times a slot runs on beyond its first, in their stored order.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>A list of {'days': [...], 'hour': h, 'minute': m}, empty when there are
+    none. An entry with no recognisable day is dropped, the days come back in
+    calendar order, and the hour and minute are clamped to a clock.</returns>
+    <remarks>
+    MULTI-TIMES, 22/10/2026. The slot's own days, hour and minute stay its first
+    entry, so a slot saved before this, a backup and the add-on API all read as
+    before; extra_times only adds more. Each entry is a further source of
+    occurrences of the same slot (see scheduler.slot_facets), so it shares the
+    slot's favourite, banner and everything else. For a monthly, yearly or one shot
+    slot only an entry's time matters: it runs on the same day at that time too.
+    </remarks>
+    """
+    names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    out = []
+    for entry in slot.get('extra_times') or []:
+        if not isinstance(entry, dict):
+            continue
+        days = [d for d in names if d in (entry.get('days') or [])]
+        if not days:
+            continue
+        try:
+            hour = min(max(int(entry.get('hour', 19)), 0), 23)
+            minute = min(max(int(entry.get('minute', 0)), 0), 59)
+        except (TypeError, ValueError):
+            continue
+        out.append({'days': days, 'hour': hour, 'minute': minute})
+    return out
+
+
+def row_item_of(slot):
+    """
+    <summary>
+    Whether the Functional skin's Coming up rows name what a list slot will play,
+    rather than the list.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>The slot's own choice when it has made one; otherwise True for the in
+    order modes and False for the random ones, which is how the rows read before
+    the choice existed.</returns>
+    <remarks>
+    ROW-ITEM, 22/10/2026. Only a Functional list slot uses it, and only the skin's
+    Coming up rows: the banner always names what plays. A random slot can name its
+    film because the pick for each showing is drawn when it first shows in the
+    rows (COMING-UP-PICK-AHEAD).
+    </remarks>
+    """
+    value = slot.get('row_item')
+    if isinstance(value, bool):
+        return value
+    from resources.lib import functional_lists
+    return functional_lists.mode_of(slot) not in functional_lists.RANDOM_MODES
+
+
+def ends_at_of(slot):
+    """
+    <summary>
+    Whether the Functional skin may put an Ends At line after this slot.
+    </summary>
+    <param name="slot">A slot dict from the store.</param>
+    <returns>True unless the slot has it switched off.</returns>
+    <remarks>
+    COMING-UP-ENDS, 22/10/2026. A setting for the Functional skin's Coming up list
+    only: when the skin's own Ends At setting is on, a run of back to back slots
+    ending with this one gets a line saying when the run ends. Engage itself does
+    nothing different. On by default, so a slot saved before this carries no key and
+    reads as on.
+    </remarks>
+    """
+    return bool(slot.get('ends_at', True))
+
+
 def banner_style_of(slot):
     """
     <summary>
@@ -778,6 +855,8 @@ def new_slot(favourite='', day='Monday'):
         'snooze': True,
         'timeout_action': DEFAULT_TIMEOUT_ACTION,
         'banner_style': DEFAULT_SLOT_BANNER_STYLE,  # one of SLOT_BANNER_STYLES
+        'extra_times': [],     # MULTI-TIMES: more days and times, see extra_times_of
+        'ends_at': True,       # COMING-UP-ENDS: Functional's Ends At line, see ends_at_of
     }
 
 

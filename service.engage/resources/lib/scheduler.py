@@ -79,14 +79,19 @@ NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
 # next_property_order.
 # COMING-UP-MORE, 21/10/2026: 22, up from 11, so Functional's 22 line list can
 # fill when several slots share a day and each takes one line instead of two.
-NEXT_LIST_COUNT = 22
+# COMING-UP-SCROLL, 22/10/2026: 50, so Functional's list can scroll on through
+# the whole seven day look ahead; the skin still draws 22 lines at a time.
+NEXT_LIST_COUNT = 50
 # COMING-UP-RUNTIME, 22/10/2026: each row also carries Due, the occurrence as
 # 'YYYY-MM-DDTHH:MM', and Runtime, how long what it will play runs in whole
 # seconds, empty when that cannot be known (a random list pick not yet drawn,
 # a plain file, a plugin or a library item with no duration). Functional uses
 # them to work out when a slot queued behind another will really start. They
 # come before When and Label, so Label is still written last and cleared first.
-NEXT_LIST_NAMES = ('Due', 'Runtime', 'When', 'Label')
+# COMING-UP-ENDS, 22/10/2026: EndsAt is '1' when the row's slot has its Ends At
+# switch on (slots.ends_at_of), empty when off; Functional reads it to decide
+# whether a run ending with that row gets an Ends At line.
+NEXT_LIST_NAMES = ('Due', 'Runtime', 'EndsAt', 'When', 'Label')
 # How far ahead the next occurrence is looked for. Today plus seven days, so a
 # weekly slot already dealt with today still has a next occurrence (the same
 # weekday next week) rather than vanishing from the skin for the evening.
@@ -157,7 +162,7 @@ def next_property_order(values):
     <remarks>
     Publishing: the single set in NEXT_PROPERTY_NAMES order (Label last), then the
     rows from NEXT_LIST_COUNT down to 1, each in NEXT_LIST_NAMES order (Due,
-    Runtime, When, Label). Clearing: the
+    Runtime, EndsAt, When, Label). Clearing: the
     single set reversed (Label first, as it always has been), then rows 1 upwards,
     each Label first, so each group is cleared in the reverse of its publish order.
     A row with no Label in values is being cleared, so it takes the clearing order
@@ -202,6 +207,44 @@ def parse_kodi_datetime(text):
         return datetime(year, month, day, hour, minute, second)
     except (ValueError, TypeError):
         return None
+
+
+def slot_facets(data):
+    """
+    <summary>
+    One slot dict per day and time a stored slot runs at: its own, then each of its
+    extra_times.
+    </summary>
+    <param name="data">A stored slot dict.</param>
+    <returns>A list of slot dicts, the stored one first and unchanged; each further
+    one is a copy with that entry's days, hour and minute.</returns>
+    <remarks>
+    MULTI-TIMES, 22/10/2026. The scheduler wraps each as its own Slot with the same
+    id, so every rule that works on one day and time (due, warning, catch up,
+    snooze, the Coming up rows) works on each unchanged, and the occurrence key,
+    which carries the time, keeps them apart. An entry that repeats the slot's own
+    days and time, or an earlier entry, is left out. Anything keyed by the slot id
+    alone, such as a list's place or the cached episode line, is shared, which is
+    right: they are showings of one slot.
+    </remarks>
+    """
+    from resources.lib import slots as slot_store
+    if not isinstance(data, dict):
+        return [data]
+    own_days = data.get('days') or ([data['day']] if data.get('day') else [])
+    seen = {(tuple(own_days), slot_rules._int_or(data.get('hour'), 19),
+             slot_rules._int_or(data.get('minute'), 0))}
+    facets = [data]
+    for entry in slot_store.extra_times_of(data):
+        marker = (tuple(entry['days']), entry['hour'], entry['minute'])
+        if marker in seen:
+            continue
+        seen.add(marker)
+        facet = dict(data)
+        facet.pop('day', None)
+        facet.update(entry)
+        facets.append(facet)
+    return facets
 
 
 class Slot:
@@ -256,6 +299,11 @@ class Slot:
         self.timeout_action = slot_store.timeout_action_of(data)
         # The slot's banner layout choice: 'standard', 'thin' or 'default'.
         self.banner_style = slot_store.banner_style_of(data)
+        # COMING-UP-ENDS: whether the Functional skin may end a run with this slot's
+        # Ends At line; published per Coming up row as EndsAt.
+        self.ends_at = slot_store.ends_at_of(data)
+        # ROW-ITEM: a list slot's Coming up rows name what it plays, or the list.
+        self.row_item = slot_store.row_item_of(data)
         # 'favourite' (default) plays a single Kodi favourite (TV next-unwatched
         # or movie/folder). 'sequence' plays the next unwatched item from an
         # ordered library list: movies (e.g. the Marvel films) or episodes
@@ -468,7 +516,10 @@ class EngageScheduler:
         from resources.lib import slots as slot_store
         slots = []
         skin_lists = None
-        for data in slot_store.load_slots():
+        # MULTI-TIMES: a slot with extra days and times is read once per entry; see
+        # slot_facets.
+        stored = [facet for data in slot_store.load_slots() for facet in slot_facets(data)]
+        for data in stored:
             try:
                 slot = Slot(data)
             except Exception as e:
@@ -1384,7 +1435,7 @@ class EngageScheduler:
         runtimes = self._slot_runtimes(slot)
         return runtimes[nth] if nth < len(runtimes) else 0
 
-    def _row_label(self, slot, nth):
+    def _row_label(self, slot, nth, key=None):
         """
         <summary>
         The label of one numbered Coming up row.
@@ -1392,11 +1443,30 @@ class EngageScheduler:
         <param name="slot">The slot due in that row.</param>
         <param name="nth">How many earlier rows the same slot already has, 0 for its
         first.</param>
-        <returns>The slot's label, or for a list slot the entry from _list_row_labels,
-        falling back to the slot's label when there is none.</returns>
+        <param name="key">The row's occurrence key, for a random list slot's pick.</param>
+        <returns>The slot's label, or for a list slot set to name what it plays, the
+        entry from _list_row_labels, or for a random one the item drawn for that
+        showing; the slot's label whenever there is none.</returns>
+        <remarks>
+        ROW-ITEM, 22/10/2026: a list slot names what it plays only while its row_item
+        choice says so (slots.row_item_of); otherwise the list, by the name the skin
+        gives it, as random slots always did.
+        </remarks>
         """
         if slot.kind != 'list':
             return slot.label
+        if not slot.row_item:
+            return slot.list_title or slot.label
+        if slot.list_mode in functional_lists.RANDOM_MODES:
+            if key is None:
+                return slot.label
+            try:
+                pick = self._resolve_list_item(slot, key)
+            except Exception as e:
+                self._log('Slot {}: naming the pick for the rows failed: {}'.format(
+                    slot.index + 1, e), xbmc.LOGWARNING)
+                pick = None
+            return pick['label'] if pick else slot.label
         labels = self._list_row_labels(slot)
         return labels[nth] if nth < len(labels) else slot.label
 
@@ -2344,17 +2414,18 @@ class EngageScheduler:
                     'Thumb': thumb,
                     'SlotId': str(slot.id),
                     'State': self._next_state(slot, due, key, now),
-                    'Count': str(len(slots)),
+                    'Count': str(len({s.id for s in slots})),
                 }
                 shown = {}
                 for number, (row_due, row_key, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
                     nth = shown.get(row_slot.id, 0)
                     shown[row_slot.id] = nth + 1
-                    values['{}.Label'.format(number)] = self._row_label(row_slot, nth)
+                    values['{}.Label'.format(number)] = self._row_label(row_slot, nth, row_key)
                     values['{}.When'.format(number)] = when_label(row_due, now)
                     values['{}.Due'.format(number)] = row_due.strftime('%Y-%m-%dT%H:%M')
                     seconds = self._row_runtime(row_slot, nth, row_key)
                     values['{}.Runtime'.format(number)] = str(seconds) if seconds else ''
+                    values['{}.EndsAt'.format(number)] = '1' if row_slot.ends_at else ''
                 self._write_next_properties(values, reason)
             except Exception:
                 import traceback

@@ -34,8 +34,11 @@ Favourites and library.
   monthly on a day of the month, yearly on a date, or just once on a one-off
   date. A monthly slot on the 29th to 31st runs on the last day of a shorter
   month, and a yearly 29th February runs on the 28th outside leap years.
-- 📅 **Multiple days per slot**, pick any combination of weekdays (great for a
-  show that's stripped daily, e.g. the Simpsons every weekday at 6).
+- 📅 **Multiple days and times per slot**, pick any combination of weekdays
+  (great for a show that's stripped daily, e.g. the Simpsons every weekday at
+  6), and add more days with their own time to the same slot (Voyager on
+  Monday and Wednesday at 19:00 and on Saturday at 15:00). Every showing plays
+  the next one in line, whichever day and time it falls on.
 - 🎞️ **Movie sequences**, build an ordered list of films (e.g. all the Marvel
   movies); each scheduled showing plays the next one you haven't watched.
 - 🦸 **Binge / crossover orders**, weave episodes from several shows into one
@@ -55,7 +58,10 @@ Favourites and library.
   and episodes of the same show, then only come up in turn, so Prisoner of
   Azkaban never plays before Chamber of Secrets. The order follows either where
   they sit in the list (reorder the list in the skin to fix an exception) or
-  release date. A film Kodi has not put in a set counts as standalone.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
+  release date. A film Kodi has not put in a set counts as standalone. In the
+  Functional skin's Coming up list a list slot can name either the list or the
+  film or episode each showing will play; random slots draw their pick as soon
+  as the showing appears there, so the name holds right through to the banner.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
   *unwatched* episode (and skips season-0 specials until the main run is done).
   Plays it as a proper library/plugin item, so metadata and watched-tracking
   just work.
@@ -88,8 +94,13 @@ Favourites and library.
 - ✅ **Watched it early?** If you've played the show within the last few hours
   (4 by default, adjustable, 0 turns it off) the slot stays quiet that day
   instead of nagging you about what you just watched.
-- 🗂️ **Friendly slot manager**, add, edit, duplicate and delete slots through
-  simple on-screen menus that work perfectly with a remote. No fiddly keypads.
+- 🗂️ **Friendly slot manager**, a full screen list of every slot with what it
+  plays, when it runs and when it's next due, sortable by next up, A to Z,
+  time of day or type. Add, edit, duplicate and delete slots through simple
+  on-screen menus that work perfectly with a remote. No fiddly keypads.
+- ⏹️ **Ends At in the Functional skin**, each slot has a switch for whether the
+  Functional skin's Coming up list may show an "Ends At" line after a run of
+  back to back slots that ends with it. It changes only what the skin shows.
 - 💾 **Backup & Restore**, save all your slots and settings to a JSON file and
   restore them on any box. Perfect for moving to a new media centre.
 
@@ -154,7 +165,7 @@ numbered rows below for its "Coming up" list.
 | `Engage.Next.State` | `upcoming`, `warning`, `snoozed` or `overdue` | `upcoming` |
 | `Engage.Next.Count` | How many slots are enabled | `4` |
 
-Beside that single set, the next 22 occurrences across every enabled slot,
+Beside that single set, the next 50 occurrences across every enabled slot,
 in due order over the coming seven days, are published as numbered rows. Each
 row is the slot's title and when it is due, deliberately without an episode
 line. Number 1 is the same occurrence as the single set. A Functional list
@@ -162,16 +173,17 @@ slot is named differently: a random one by its list, an in order one by the
 item due to play, and a second showing of it by the item after that. A weekly slot on two
 days this week appears twice; a number with no occurrence has both properties
 cleared, so gate the list on `Engage.Next.1.Label` and each row on its own
-label. Rows are written from 22 down to 1 with each row's label last, and
+label. Rows are written from 50 down to 1 with each row's label last, and
 cleared from 1 upwards with each row's label first, so a half updated list is
 never shown.
 
 | `Window(home).Property(...)` | What it holds | Example |
 |---|---|---|
-| `Engage.Next.1.Label` to `Engage.Next.22.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
-| `Engage.Next.1.When` to `Engage.Next.22.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
-| `Engage.Next.1.Due` to `Engage.Next.22.Due` | When it is due, as `YYYY-MM-DDTHH:MM` for a skin to calculate with | `2026-10-22T19:00` |
-| `Engage.Next.1.Runtime` to `Engage.Next.22.Runtime` | How long what it will play runs, in whole seconds; empty when that cannot be known, such as a random list pick not yet drawn, a plain file or a plugin | `2640` |
+| `Engage.Next.1.Label` to `Engage.Next.50.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
+| `Engage.Next.1.When` to `Engage.Next.50.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
+| `Engage.Next.1.Due` to `Engage.Next.50.Due` | When it is due, as `YYYY-MM-DDTHH:MM` for a skin to calculate with | `2026-10-22T19:00` |
+| `Engage.Next.1.Runtime` to `Engage.Next.50.Runtime` | How long what it will play runs, in whole seconds; empty when that cannot be known, such as a random list pick not yet drawn, a plain file or a plugin | `2640` |
+| `Engage.Next.1.EndsAt` to `Engage.Next.50.EndsAt` | `1` when the slot's "Ends At line after it" switch is on (the default), empty when off; a setting for the Functional skin's Coming up list | `1` |
 
 ## For developers
 

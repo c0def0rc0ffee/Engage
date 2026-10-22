@@ -355,7 +355,7 @@ def test_publish():
         equal(got.get('2.When'), 'Thursday 19:00', 'row 2 When')
         equal(got.get('3.Label'), None, 'no third occurrence, nothing written for row 3')
         equal(WRITES[-1][1], 'Engage.Next.1.Label', 'row 1 Label is written last of all')
-        equal(len(WRITES), 16, 'every property written once: ten single, two rows of three (no Runtime known)')
+        equal(len(WRITES), 18, 'every property written once: ten single, two rows of four (no Runtime known)')
         equal(sched.describe_calls, [2], 'only the single set slot is resolved, rows need no lookup')
 
         del WRITES[:]
@@ -434,20 +434,21 @@ def test_publish():
 # --- next_property_order ----------------------------------------------------------
 
 def test_property_order():
-    """<summary>Rows written from 22 down to 1, Label last; cleared from 1 up, Label first.</summary>"""
+    """<summary>Rows written from NEXT_LIST_COUNT down to 1, Label last; cleared from 1 up, Label first.</summary>"""
     publishing = scheduler.next_property_order({'Label': 'x', '1.Label': 'x', '2.Label': 'x'})
     equal(publishing[:10], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
-    equal(publishing[10:14], ['22.Label', '22.When', '22.Runtime', '22.Due'],
+    top = scheduler.NEXT_LIST_COUNT
+    equal(publishing[10:15], ['{}.{}'.format(top, n) for n in ('Label', 'When', 'EndsAt', 'Runtime', 'Due')],
           'an empty row clears Label first')
-    equal(publishing[-8:], ['2.Due', '2.Runtime', '2.When', '2.Label',
-                            '1.Due', '1.Runtime', '1.When', '1.Label'],
+    equal(publishing[-10:], ['2.Due', '2.Runtime', '2.EndsAt', '2.When', '2.Label',
+                             '1.Due', '1.Runtime', '1.EndsAt', '1.When', '1.Label'],
           'occupied rows end with row 1, each Label last')
-    equal(len(publishing), 10 + 4 * scheduler.NEXT_LIST_COUNT, 'every name once')
+    equal(len(publishing), 10 + 5 * scheduler.NEXT_LIST_COUNT, 'every name once')
     check(not any(name.endswith('.Episode') for name in publishing), 'rows have no Episode')
     clearing = scheduler.next_property_order({})
     equal(clearing[:10], list(reversed(scheduler.NEXT_PROPERTY_NAMES)), 'single set reversed')
-    equal(clearing[10:18], ['1.Label', '1.When', '1.Runtime', '1.Due',
-                            '2.Label', '2.When', '2.Runtime', '2.Due'],
+    equal(clearing[10:20], ['1.Label', '1.When', '1.EndsAt', '1.Runtime', '1.Due',
+                            '2.Label', '2.When', '2.EndsAt', '2.Runtime', '2.Due'],
           'rows from 1 upwards, Label first')
     full = scheduler.next_property_order({name: 'x' for name in publishing})
     equal(list(reversed(full[10:])), clearing[10:], 'rows are cleared in the reverse of their publish order')
@@ -482,7 +483,7 @@ def test_occurrences():
 # --- The numbered list ----------------------------------------------------------------
 
 def test_publish_list():
-    """<summary>Rows in due order across slots, title and When only, repeats allowed, 22 at most, write and clear order.</summary>"""
+    """<summary>Rows in due order across slots, title and When only, repeats allowed, NEXT_LIST_COUNT at most, write and clear order.</summary>"""
     reset_window()
     store.save_slots([
         make_slot(1, 'Voyager', ['Sunday', 'Thursday'], 19),
@@ -539,20 +540,20 @@ def test_publish_list():
             equal(row[-1], 'Engage.Next.{}.Label'.format(number), 'row {} Label written last'.format(number))
         check(written.index('Engage.Next.Label') < written.index('Engage.Next.12.Label'),
               'the single set goes before the rows')
-        equal(len(WRITES), 10 + 12 * 3 + 3 - 1,
+        equal(len(WRITES), 10 + 12 * 4 + 3 - 1,
               'every property written once; the empty Thumb is not written')
 
         del WRITES[:]
         sched._publish_next('list again')
         equal(WRITES, [], 'nothing changed, nothing written')
 
-        # COMING-UP-MORE: the cap is 22. Four daily slots give 32 in the window.
+        # COMING-UP-SCROLL: the cap is 50. Seven daily slots give 56 in the window.
         every_day = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        store.save_slots([make_slot(n, 'Cap{}'.format(n), every_day, 17 + n) for n in range(1, 5)])
+        store.save_slots([make_slot(n, 'Cap{}'.format(n), every_day, 14 + n) for n in range(1, 8)])
         sched._publish_next('cap')
         got = props()
-        check(got.get('22.Label'), 'row 22 is published')
-        equal(got.get('23.Label'), None, 'row 23 is not: 22 at most')
+        check(got.get('50.Label'), 'row 50 is published')
+        equal(got.get('51.Label'), None, 'row 51 is not: 50 at most')
 
         # Two slots due at the same minute keep their list order, in row 1 and the single set.
         store.save_slots([
@@ -577,11 +578,45 @@ def test_publish_list():
         equal(props(), {}, 'everything cleared')
         equal(WRITES[0], ('clear', 'Engage.Next.Label'), 'single Label first')
         rows = [w[1] for w in WRITES if w[1][len('Engage.Next.'):].split('.')[0].isdigit()]
-        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.1.Runtime', 'Engage.Next.1.Due',
-                     'Engage.Next.2.Label', 'Engage.Next.2.When', 'Engage.Next.2.Due'],
+        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.1.EndsAt',
+                     'Engage.Next.1.Runtime', 'Engage.Next.1.Due',
+                     'Engage.Next.2.Label', 'Engage.Next.2.When', 'Engage.Next.2.EndsAt',
+                     'Engage.Next.2.Due'],
               'rows cleared from 1 upwards, Label first, only what was set')
         check(written.index('Engage.Next.11.Label') < written.index('Engage.Next.1.Label'),
               'row 11 was written before row 1')
+    finally:
+        scheduler.datetime = datetime
+
+
+def test_multi_times():
+    """<summary>MULTI-TIMES and COMING-UP-ENDS: extra days and times, and the EndsAt row flag.</summary>"""
+    data = make_slot(1, 'Voyager', ['Monday', 'Wednesday'], 19)
+    data['extra_times'] = [{'days': ['Saturday'], 'hour': 15, 'minute': 0},
+                           {'days': ['Wednesday', 'Monday'], 'hour': 19, 'minute': 0},  # repeats the first
+                           {'days': ['Funday'], 'hour': 9, 'minute': 0}]                 # no real day
+    facets = scheduler.slot_facets(data)
+    equal([(f['days'], f['hour']) for f in facets], [(['Monday', 'Wednesday'], 19), (['Saturday'], 15)],
+          'the first entry, then each new extra one')
+    from resources.lib import slot_rules
+    equal(slot_rules.next_due(data, datetime(2026, 10, 22, 12, 0)), datetime(2026, 10, 24, 15, 0),
+          'next due is the soonest over every entry (Saturday 15:00 before Monday 19:00)')
+
+    reset_window()
+    film = make_slot(2, 'Film', ['Saturday'], 20)
+    film['ends_at'] = False
+    store.save_slots([data, film])
+    sched = make_scheduler({})
+    scheduler.datetime = _FixedDatetime.at(datetime(2026, 10, 22, 12, 0))  # Thursday noon
+    try:
+        sched._publish_next('multi')
+        got = props()
+        equal([(got.get('{}.Label'.format(n)), got.get('{}.When'.format(n))) for n in (1, 2, 3)],
+              [('Voyager', 'Saturday 15:00'), ('Film', 'Saturday 20:00'), ('Voyager', 'Monday 19:00')],
+              'each entry gives its own rows, in due order')
+        equal([got.get('{}.EndsAt'.format(n)) for n in (1, 2)], ['1', None],
+              'EndsAt follows each slot\'s switch, on by default')
+        equal(got.get('Count'), '2', 'Count is still the slots, not their entries')
     finally:
         scheduler.datetime = datetime
 
@@ -631,7 +666,7 @@ def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_when_label, test_occurrence_key, test_next_occurrence, test_occurrences,
                  test_next_state, test_property_order, test_publish, test_publish_list,
-                 test_runtimes):
+                 test_runtimes, test_multi_times):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:
