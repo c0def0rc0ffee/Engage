@@ -707,6 +707,53 @@ def set_series_progress(slot_id, group, identity, index):
         _log('could not write list_progress.json: {}'.format(e), xbmc.LOGWARNING)
 
 
+def _list_picks_path():
+    """
+    <summary>
+    Full path of list_picks.json, where random list slots keep the item drawn for
+    each coming occurrence.
+    </summary>
+    <returns>The path.</returns>
+    """
+    return os.path.join(_data_dir(), 'list_picks.json')
+
+
+def get_list_picks():
+    """
+    <summary>
+    The random list picks kept from an earlier run.
+    </summary>
+    <returns>{occurrence key: choice dict}, empty when there are none or the file
+    cannot be read.</returns>
+    <remarks>
+    COMING-UP-PICK-AHEAD, 22/10/2026. Since a random list slot draws its pick when
+    the occurrence first shows in the Coming up rows, possibly days ahead, the pick
+    has to outlive a restart, or the film the banner names would change. Kept out
+    of slots.json for the same reason as list_progress.json. An unreadable file is
+    moved aside by _load_dict and the picks are drawn again.
+    </remarks>
+    """
+    data = _load_dict(_list_picks_path())
+    return {key: value for key, value in data.items() if isinstance(value, dict)}
+
+
+def set_list_picks(picks):
+    """
+    <summary>
+    Keep the random list picks, replacing what the file held.
+    </summary>
+    <param name="picks">{occurrence key: choice dict}, every value JSON safe.</param>
+    <remarks>
+    Written through _write_json, like set_list_progress. A failed write is logged
+    and swallowed: the worst case is a pick drawn again after a restart.
+    </remarks>
+    """
+    try:
+        _write_json(_list_picks_path(), picks)
+    except (OSError, IOError, RuntimeError, TypeError, ValueError) as e:
+        _log('could not write list_picks.json: {}'.format(e), xbmc.LOGWARNING)
+
+
 def new_slot(favourite='', day='Monday'):
     """
     <summary>

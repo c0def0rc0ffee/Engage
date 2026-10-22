@@ -165,13 +165,15 @@ def make_slot(slot_id, label, days, hour, minute=0, date='', enabled=True, favou
     return data
 
 
-def make_scheduler(describe_results):
+def make_scheduler(describe_results, runtimes=None):
     """
     <summary>
     An EngageScheduler whose library lookups are replaced by a dict of slot id to
-    (episode_label, thumb), counting how often each is asked for.
+    (episode_label, thumb), counting how often each is asked for, and a dict of slot
+    id to the running time of each coming showing (COMING-UP-RUNTIME).
     </summary>
     """
+    store.set_list_picks({})  # COMING-UP-PICK-AHEAD: picks persist, so each scheduler starts with none
     sched = scheduler.EngageScheduler()
     sched._gui_ready = True
     sched.describe_calls = []
@@ -181,6 +183,7 @@ def make_scheduler(describe_results):
         return describe_results.get(slot.id, ('', ''))
 
     sched._describe_slot = describe
+    sched._lookup_runtimes = lambda slot: (runtimes or {}).get(slot.id, [])
     return sched
 
 
@@ -352,7 +355,7 @@ def test_publish():
         equal(got.get('2.When'), 'Thursday 19:00', 'row 2 When')
         equal(got.get('3.Label'), None, 'no third occurrence, nothing written for row 3')
         equal(WRITES[-1][1], 'Engage.Next.1.Label', 'row 1 Label is written last of all')
-        equal(len(WRITES), 14, 'every property written once: ten single, two rows of two')
+        equal(len(WRITES), 16, 'every property written once: ten single, two rows of three (no Runtime known)')
         equal(sched.describe_calls, [2], 'only the single set slot is resolved, rows need no lookup')
 
         del WRITES[:]
@@ -434,14 +437,17 @@ def test_property_order():
     """<summary>Rows written from 22 down to 1, Label last; cleared from 1 up, Label first.</summary>"""
     publishing = scheduler.next_property_order({'Label': 'x', '1.Label': 'x', '2.Label': 'x'})
     equal(publishing[:10], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
-    equal(publishing[10:12], ['22.Label', '22.When'], 'an empty row clears Label first')
-    equal(publishing[-4:], ['2.When', '2.Label', '1.When', '1.Label'],
+    equal(publishing[10:14], ['22.Label', '22.When', '22.Runtime', '22.Due'],
+          'an empty row clears Label first')
+    equal(publishing[-8:], ['2.Due', '2.Runtime', '2.When', '2.Label',
+                            '1.Due', '1.Runtime', '1.When', '1.Label'],
           'occupied rows end with row 1, each Label last')
-    equal(len(publishing), 10 + 2 * scheduler.NEXT_LIST_COUNT, 'every name once')
+    equal(len(publishing), 10 + 4 * scheduler.NEXT_LIST_COUNT, 'every name once')
     check(not any(name.endswith('.Episode') for name in publishing), 'rows have no Episode')
     clearing = scheduler.next_property_order({})
     equal(clearing[:10], list(reversed(scheduler.NEXT_PROPERTY_NAMES)), 'single set reversed')
-    equal(clearing[10:14], ['1.Label', '1.When', '2.Label', '2.When'],
+    equal(clearing[10:18], ['1.Label', '1.When', '1.Runtime', '1.Due',
+                            '2.Label', '2.When', '2.Runtime', '2.Due'],
           'rows from 1 upwards, Label first')
     full = scheduler.next_property_order({name: 'x' for name in publishing})
     equal(list(reversed(full[10:])), clearing[10:], 'rows are cleared in the reverse of their publish order')
@@ -485,7 +491,8 @@ def test_publish_list():
         make_slot(4, 'TNG', ['Saturday'], 21),
         make_slot(5, 'Late', ['Sunday'], 23),
     ])
-    sched = make_scheduler({1: ('S03E04, Gravity', ''), 3: ('S01E02, Second', ''), 4: ('S06E15, Tapestry', '')})
+    sched = make_scheduler({1: ('S03E04, Gravity', ''), 3: ('S01E02, Second', ''), 4: ('S06E15, Tapestry', '')},
+                           {1: [2700, 2640, 2580]})
     fixed_now = datetime(2026, 10, 11, 12, 0)  # Sunday noon
     scheduler.datetime = _FixedDatetime.at(fixed_now)
     try:
@@ -510,6 +517,13 @@ def test_publish_list():
             equal(got.get('{}.Episode'.format(number)), None, 'row {} has no episode line'.format(number))
             equal(got.get('{}.When'.format(number)), when, 'row {} When'.format(number))
         equal(got.get('13.Label'), None, 'nothing past the seven day look ahead is published')
+        # COMING-UP-RUNTIME: every row has its Due; Voyager's three showings have
+        # their own episode's length, and the slots with nothing known have none.
+        equal(got.get('1.Due'), '2026-10-11T19:00', 'row 1 Due')
+        equal(got.get('11.Due'), '2026-10-18T19:00', 'row 11 Due')
+        equal([got.get('{}.Runtime'.format(n)) for n in (1, 8, 11)], ['2700', '2640', '2580'],
+              'each Voyager showing has the length of the episode it will play')
+        equal(got.get('2.Runtime'), None, 'no Runtime when nothing is known')
         equal(got.get('Label'), 'Voyager', 'single set Label matches row 1')
         equal(got.get('Episode'), 'S03E04, Gravity', 'the single set keeps its episode line')
         equal(got.get('When'), 'Tonight 19:00', 'single set When matches row 1')
@@ -525,7 +539,7 @@ def test_publish_list():
             equal(row[-1], 'Engage.Next.{}.Label'.format(number), 'row {} Label written last'.format(number))
         check(written.index('Engage.Next.Label') < written.index('Engage.Next.12.Label'),
               'the single set goes before the rows')
-        equal(len(WRITES), 10 + 12 * 2 - 1,
+        equal(len(WRITES), 10 + 12 * 3 + 3 - 1,
               'every property written once; the empty Thumb is not written')
 
         del WRITES[:]
@@ -563,12 +577,36 @@ def test_publish_list():
         equal(props(), {}, 'everything cleared')
         equal(WRITES[0], ('clear', 'Engage.Next.Label'), 'single Label first')
         rows = [w[1] for w in WRITES if w[1][len('Engage.Next.'):].split('.')[0].isdigit()]
-        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.2.Label', 'Engage.Next.2.When'],
+        equal(rows, ['Engage.Next.1.Label', 'Engage.Next.1.When', 'Engage.Next.1.Runtime', 'Engage.Next.1.Due',
+                     'Engage.Next.2.Label', 'Engage.Next.2.When', 'Engage.Next.2.Due'],
               'rows cleared from 1 upwards, Label first, only what was set')
         check(written.index('Engage.Next.11.Label') < written.index('Engage.Next.1.Label'),
               'row 11 was written before row 1')
     finally:
         scheduler.datetime = datetime
+
+
+def test_runtimes():
+    """<summary>COMING-UP-RUNTIME: where a row's length comes from, and when it is unknown.</summary>"""
+    sched = make_scheduler({})
+    equal(sched._details_runtime({'runtime': 2700}), 2700, 'the library runtime')
+    equal(sched._details_runtime({'runtime': 0, 'streamdetails': {'video': [{'duration': 2580}]}}), 2580,
+          'the first video stream when the runtime is empty')
+    equal(sched._details_runtime({'duration': 215}), 215, 'a song duration')
+    equal(sched._details_runtime({}), 0, 'nothing known')
+    equal(sched._spec_runtime({'file': '/films/a.mkv'}), 0, 'a plain file asks nothing and is unknown')
+    equal(sched._spec_runtime(None), 0, 'no spec is unknown')
+    rnd = scheduler.Slot(make_slot(7, 'Random night', ['Monday'], 20))
+    rnd.kind, rnd.list_mode = 'list', 'random'
+    rnd.list_items = []
+    equal(sched._row_runtime(rnd, 0, 'k1'), 0, 'a random list with nothing to draw is unknown')
+    sched._list_picks['k1'] = {'spec': {'file': '/films/a.mkv'}, 'runtime': 6300}
+    sched._picks_checked.add('k1')  # a kept pick already checked against the list
+    equal(sched._row_runtime(rnd, 0, 'k1'), 6300, 'a drawn pick gives its length')
+    fav = scheduler.Slot(make_slot(8, 'Voyager', ['Monday'], 19))
+    sched._lookup_runtimes = lambda slot: [2700, 2640]
+    equal([sched._row_runtime(fav, n, None) for n in range(3)], [2700, 2640, 0],
+          'the nth showing takes the nth length, unknown past the end')
 
 
 class _FixedDatetime(datetime):
@@ -592,7 +630,8 @@ class _FixedDatetime(datetime):
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_when_label, test_occurrence_key, test_next_occurrence, test_occurrences,
-                 test_next_state, test_property_order, test_publish, test_publish_list):
+                 test_next_state, test_property_order, test_publish, test_publish_list,
+                 test_runtimes):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:
