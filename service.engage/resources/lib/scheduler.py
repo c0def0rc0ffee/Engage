@@ -1270,11 +1270,12 @@ class EngageScheduler:
         order unwatched mode gives the unwatched items in list order, so the second
         showing names the item after the first; once those run out the list is all
         watched and nothing more is given. The in turn mode walks on from the item
-        played last, wrapping round.</returns>
+        played last, wrapping round. None when the lookup failed.</returns>
         <remarks>
         Cached per slot, signed like _next_item_cached and cleared with it, because
         the unwatched mode asks the library about every item. A lookup failure is
-        logged and cached as no labels, so the rows fall back to the slot's label.
+        logged and cached as None, so the rows fall back to the slot's label and
+        _drop_spent_rows keeps them rather than reading the failure as all watched.
         </remarks>
         """
         signature = self._slot_signature(slot)
@@ -1304,7 +1305,7 @@ class EngageScheduler:
         except Exception as e:
             self._log('Slot {}: Coming up rows for the skin failed: {}'.format(
                 slot.index + 1, e), xbmc.LOGWARNING)
-            labels = []
+            labels = None
         self._next_rows_cache[slot.id] = (signature, labels)
         return labels
 
@@ -1539,8 +1540,45 @@ class EngageScheduler:
                     slot.index + 1, e), xbmc.LOGWARNING)
                 pick = None
             return pick['label'] if pick else slot.label
-        labels = self._list_row_labels(slot)
+        labels = self._list_row_labels(slot) or []
         return labels[nth] if nth < len(labels) else slot.label
+
+    def _drop_spent_rows(self, upcoming):
+        """
+        <summary>
+        Leave out the occurrences of a list slot that has nothing left to play.
+        </summary>
+        <param name="upcoming">(due, key, slot) tuples in due order, as _publish_next
+        gathers them.</param>
+        <returns>The same tuples in the same order, less each in order unwatched or
+        one from each show slot's occurrences beyond the showings it has left.</returns>
+        <remarks>
+        SPENT-ROWS, 09/11/2026. Asked for after the last item of an in order list was
+        watched and its slot stayed on Coming up under its own label every day,
+        instead of dropping off so the next slot moved up. Those two modes skip what
+        is watched, so _list_row_labels gives one entry per showing still to come and
+        its length is how many occurrences have something to play. The in turn and
+        random modes always have something, a list with no items keeps its rows as
+        before, and so does a slot whose lookup failed (None), so a library hiccup
+        never empties the list. Only Coming up changes: the slot still comes due and
+        says it is all watched.
+        </remarks>
+        """
+        left = {}
+        kept = []
+        for entry in upcoming:
+            slot = entry[2]
+            if (slot.kind == 'list' and slot.list_items
+                    and slot.list_mode in (functional_lists.MODE_NEXT, functional_lists.MODE_EACH)):
+                if slot.id not in left:
+                    labels = self._list_row_labels(slot)
+                    left[slot.id] = None if labels is None else len(labels)
+                if left[slot.id] is not None:
+                    if left[slot.id] <= 0:
+                        continue
+                    left[slot.id] -= 1
+            kept.append(entry)
+        return kept
 
     def _list_series(self, items, how):
         """
@@ -1872,9 +1910,11 @@ class EngageScheduler:
         <remarks>
         A stop that _stop_and_requeue issued itself is ignored: the slot it is about
         to play is not "what was playing ending", and a queued slot must not be fired
-        by it.
+        by it. Every end also starts _refresh_after_playback, so Coming up catches
+        up with what was just watched.
         </remarks>
         """
+        threading.Thread(target=self._refresh_after_playback, daemon=True).start()
         if self._stopping_on_purpose:
             self._stopping_on_purpose = False
             self._log('Playback stopped by Engage itself, the queue is left alone')
@@ -1885,6 +1925,28 @@ class EngageScheduler:
             threading.Thread(target=self._each_end_check, daemon=True).start()
             return
         self._after_playback_ended()
+
+    def _refresh_after_playback(self):
+        """
+        <summary>
+        Drop the cached Coming up lines and publish again, a few seconds after
+        playback ends.
+        </summary>
+        <remarks>
+        SPENT-ROWS, 09/11/2026. The caches are normally cleared by Kodi's
+        VideoLibrary.OnUpdate for a playcount, but a watched state written by
+        another add-on straight into the library sends none, which left a watched
+        item named on Coming up. Five seconds gives Kodi and such an add-on time
+        to record the play first. Runs on its own thread so the player callback
+        is never held up.
+        </remarks>
+        """
+        if self.monitor.waitForAbort(5):
+            return
+        self._next_item_cache.clear()
+        self._next_rows_cache.clear()
+        self._next_runtime_cache.clear()
+        self._publish_next('playback ended')
 
     def _each_end_check(self):
         """
@@ -2506,7 +2568,8 @@ class EngageScheduler:
         Does nothing until _wait_for_gui has finished, so Kodi's start-up is never
         touched. Every occurrence of every enabled slot within the look ahead window
         is gathered and sorted by due time, slots due at the same minute keeping their
-        list order. The earliest is the single set: Label is the slot's label, Episode
+        list order, and a list slot's occurrences beyond what it has left to play are
+        left out (_drop_spent_rows). The earliest is the single set: Label is the slot's label, Episode
         the banner's episode line (empty for a non-TV favourite), When the words from
         when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
         Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
@@ -2533,6 +2596,7 @@ class EngageScheduler:
                 upcoming = sorted(
                     ((due, key, slot) for slot in slots for due, key in self._occurrences(slot, now)),
                     key=lambda entry: entry[0])
+                upcoming = self._drop_spent_rows(upcoming)
                 if not upcoming:
                     self._write_next_properties({}, reason)
                     return

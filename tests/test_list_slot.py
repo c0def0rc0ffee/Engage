@@ -675,6 +675,33 @@ def test_row_labels():
     equal(sched._row_label(slot, 0), 'Saturday Night Movie', 'in order set to name the list: the list')
 
 
+def test_spent_rows():
+    """<summary>SPENT-ROWS: an in order slot drops off Coming up once its list is all watched.</summary>"""
+    LIBRARY.clear()
+    movie(1, playcount=1)
+    movie(2)
+    films = [item('Alpha', dbid=1), item('Bravo', dbid=2)]
+    write_lists([{'name': 'Films', 'items': films}])
+    save_list_slot('Films', 'next')
+    sched = make_scheduler()
+    slot = sched._reload_slots()[0]
+    other = scheduler.Slot(dict(store.new_slot(favourite='Voyager'), label='Voyager', id=9))
+    upcoming = [('d1', 'k1', slot), ('d2', 'k2', other), ('d3', 'k3', slot), ('d4', 'k4', slot)]
+    equal([e[1] for e in sched._drop_spent_rows(upcoming)], ['k1', 'k2'],
+          'one unwatched film left: one showing kept, the later ones dropped, other slots untouched')
+    movie(2, playcount=1)
+    sched._next_rows_cache.clear()
+    equal([e[1] for e in sched._drop_spent_rows(upcoming)], ['k2'],
+          'all watched: the slot goes and the next one moves up')
+    sched._next_rows_cache[slot.id] = (sched._slot_signature(slot), None)
+    equal(len(sched._drop_spent_rows(upcoming)), 4, 'a failed lookup keeps every row')
+    equal(sched._row_label(slot, 0), slot.list_title or slot.label, 'and the row falls back to its label')
+    save_list_slot('Films', 'turn')
+    slot = sched._reload_slots()[0]
+    upcoming = [('d1', 'k1', slot), ('d3', 'k3', slot)]
+    equal(len(sched._drop_spent_rows(upcoming)), 2, 'in turn never runs out, watched or not')
+
+
 # --- Repeats -----------------------------------------------------------------------
 
 def runs(data, *days):
@@ -759,7 +786,7 @@ def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_load_lists, test_item_helpers, test_reload, test_next_mode, test_random_mode,
                  test_random_any_mode, test_pick_ahead, test_each_show, test_series_pool, test_random_sequels,
-                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_repeats, test_monthly_occurrences,
+                 test_random_any_sequels, test_turn_index, test_turn_mode, test_recent_watch, test_cache_signature, test_group_rows, test_row_labels, test_spent_rows, test_repeats, test_monthly_occurrences,
                  test_bad_numbers):
         print('running {}'.format(test.__name__))
         test()
