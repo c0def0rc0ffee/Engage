@@ -63,7 +63,8 @@ Favourites and library.
   release date. A film Kodi has not put in a set counts as standalone. In the
   Functional skin's Coming up list a list slot can name either the list or the
   film or episode each showing will play; random slots draw their pick as soon
-  as the showing appears there, so the name holds right through to the banner.- 📺 **Knows the next episode**, for TV shows it resolves the exact next
+  as the showing appears there, so the name holds right through to the banner.
+- 📺 **Knows the next episode**, for TV shows it resolves the exact next
   *unwatched* episode (and skips season-0 specials until the main run is done).
   Plays it as a proper library/plugin item, so metadata and watched-tracking
   just work.
@@ -139,7 +140,7 @@ Configure**) and choose **Manage slots…**
 | **Catch-up window** | Hours after a missed slot it will still prompt you (0 = off) |
 | **Max missed-slot banners** | How many times an overdue banner reappears before giving up |
 | **Skip a slot watched in the last** | Hours after you played a slot's show (or a sequence item) that it stays quiet, 0 = off |
-| **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons) Uber thin, no buttons (one line that counts down to the slot's countdown action) or Full Monty (centre screen with the picture and synopsis). Every slot whose own **Banner style** is left on Default follows this, from the next banner on |
+| **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons), Uber thin, no buttons (one line that counts down to the slot's countdown action) or Full Monty (centre screen with the picture and synopsis). Every slot whose own **Banner style** is left on Default follows this, from the next banner on |
 | **Show all favourites in pickers** | Off = only video/TV favourites are listed |
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
 | **Test mode** | Fire all enabled slots immediately (handy for testing) |
@@ -148,8 +149,8 @@ Configure**) and choose **Manage slots…**
 ## For skinners
 
 While the service runs it publishes the next slot due as properties on Kodi's
-Home window, refreshed after every check, after a slot is saved and after a
-library change, and cleared when the service stops or no slot is enabled. Each
+Home window, refreshed after every check, after a slot is saved, after a
+library change and a few seconds after any playback ends, and cleared when the service stops or no slot is enabled. Each
 property is written only when its value changes. The Functional skin (0.17.0
 and later) uses them for its "Coming up" block, and (0.18.0 and later) the
 numbered rows below for its "Coming up" list.
@@ -172,7 +173,10 @@ in due order over the coming seven days, are published as numbered rows. Each
 row is the slot's title and when it is due, deliberately without an episode
 line. Number 1 is the same occurrence as the single set. A Functional list
 slot is named differently: a random one by its list, an in order one by the
-item due to play, and a second showing of it by the item after that. A weekly slot on two
+item due to play, and a second showing of it by the item after that. Once an in
+order unwatched or one episode from each show list is all watched, its slot has
+no rows (it still comes due and says it is all watched), so the next slot moves
+up. A weekly slot on two
 days this week appears twice; a number with no occurrence has both properties
 cleared, so gate the list on `Engage.Next.1.Label` and each row on its own
 label. Rows are written from 50 down to 1 with each row's label last, and
