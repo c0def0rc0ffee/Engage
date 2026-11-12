@@ -1,223 +1,52 @@
-<div align="center">
+<p align="center"><img src="docs/screenshots/banner.png" width="100%" alt="Engage, your weekly watch schedule, inside Kodi. Three tiles sketch a slim countdown banner, a list of watch slots and the Full Monty movie night panel."></p>
 
-<img src="service.engage/resources/icon.png" alt="Engage" width="160">
+<p align="center"><a href="#quick-start">Quick start</a> · <a href="#what-it-does">Features</a> · <a href="#documentation">Docs</a> · <a href="docs/settings.md">Settings</a> · <a href="docs/skinners.md">Skin properties</a> · <a href="../../releases">Releases</a></p>
 
-# Engage
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.11.10-blue" alt="Version 1.11.10">
+  <img src="https://img.shields.io/badge/licence-GPL--2.0--or--later-green" alt="GPL 2.0 or later licence">
+  <img src="https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white" alt="Python 3.8 or newer">
+  <img src="https://img.shields.io/badge/Kodi-19%20Matrix%2B-17B2E7?logo=kodi&logoColor=white" alt="Kodi 19 Matrix or newer">
+  <img src="https://img.shields.io/badge/add--on-service-17B2E7" alt="Kodi service add-on">
+  <img src="https://img.shields.io/badge/repository-DeliciousCoffee-6F4E37" alt="Available from the DeliciousCoffee repository">
+</p>
 
-**Your personal weekly watch schedule, right inside Kodi.**
+Prompts you with a countdown banner when a weekly watch slot arrives, with the next unwatched episode already chosen, instead of you remembering what to put on.
 
-*"Voyager on Thursday. TNG on Saturday. Movie night on Friday."*
+<p align="center"><img src="docs/screenshots/hero.png" width="640" alt="The standard Engage banner across the top of the Kodi home screen: the poster for a sample film, the slot name Film night, the film it will play, a countdown reading Starts in 1m 54s, and Start Now, Snooze and Cancel buttons."></p>
 
-Engage quietly waits in the background and, just before each show is due, slides a
-slim banner across the top of the screen, with the **next unwatched episode**
-already worked out and a live countdown ticking down. One tap and you're watching.
+## Quick start
 
-</div>
+1. Install the [DeliciousCoffee repository](https://github.com/c0def0rc0ffee/DeliciousCoffee) once, then install Engage from it. Kodi keeps it updated.
+2. Or download `service.engage-x.y.z.zip` from [Releases](../../releases), turn on **Settings > System > Add-ons > Unknown sources**, and use **Install from zip file**.
+3. Add the show or film to **Kodi Favourites**. For a TV show, favourite the show itself.
+4. Open Engage, choose **Manage slots...**, then **Add slot** and **Single show or film**, and pick the favourite, a day and a time.
 
----
+## What it does
 
-## Why you'll like it
-
-You've got shows you mean to keep up with, but "what was I up to on Voyager
-again?" gets in the way. Engage turns *"I should watch something tonight"* into a
-gentle, automatic nudge at the right time, and it always knows the exact next
-episode you haven't seen.
-
-No streaming service required, no accounts, no cloud. It just uses your Kodi
-Favourites and library.
-
-## Features
-
-- 🗓️ **Unlimited watch slots**, schedule any favourite (TV show, movie, folder,
-  playlist) at a time that repeats weekly on chosen day(s), every 2, 3 or 4
-  weeks on chosen day(s) (every other Tuesday, say, starting this week or next),
-  monthly on a day of the month, yearly on a date, or just once on a one-off
-  date. A monthly slot on the 29th to 31st runs on the last day of a shorter
-  month, and a yearly 29th February runs on the 28th outside leap years.
-- 📅 **Multiple days and times per slot**, pick any combination of weekdays
-  (great for a show that's stripped daily, e.g. the Simpsons every weekday at
-  6), and add more days with their own time to the same slot (Voyager on
-  Monday and Wednesday at 19:00 and on Saturday at 15:00). Every showing plays
-  the next one in line, whichever day and time it falls on.
-- 🎞️ **Movie sequences**, build an ordered list of films (e.g. all the Marvel
-  movies); each scheduled showing plays the next one you haven't watched.
-- 🦸 **Binge / crossover orders**, weave episodes from several shows into one
-  hand-built order (Arrow S3E1 to 3, then Flash S1E1 to 4, then back to Arrow) for
-  interlinked series like the Arrowverse. Plays the next unwatched in your order.
-- 🍿 **Functional skin lists**, schedule one of the lists you build in the
-  Functional skin (a "Saturday Night Movie" list, say) and choose how each
-  showing picks from it: the next unwatched item in the list's order, every item
-  in turn whether watched or not (wrapping back to the top after the last), a
-  random unwatched item, or any item at random. A list of TV shows can also play
-  the next unwatched episode of every show in it, back to back as one playlist,
-  so Voyager, Babylon 5 and Doctor Who each get an episode in one evening. The list stays in the skin: add,
-  reorder or remove items there and the next showing follows. Once everything in
-  a random unwatched list is watched it picks from the whole list again. A plain
-  file or plugin item in a list has no watched count Engage can read, so the
-  unwatched modes always treat it as unwatched; turn on the list's Remove
-  Watched switch in the skin to have such items drop off once seen. A random
-  slot can optionally keep sequels in order: films in the same Kodi movie set,
-  and episodes of the same show, then only come up in turn, so Prisoner of
-  Azkaban never plays before Chamber of Secrets. The order follows either where
-  they sit in the list (reorder the list in the skin to fix an exception) or
-  release date. A film Kodi has not put in a set counts as standalone. In the
-  Functional skin's Coming up list a list slot can name either the list or the
-  film or episode each showing will play; random slots draw their pick as soon
-  as the showing appears there, so the name holds right through to the banner.
-- 📺 **Knows the next episode**, for TV shows it resolves the exact next
-  *unwatched* episode (and skips season-0 specials until the main run is done).
-  Plays it as a proper library/plugin item, so metadata and watched-tracking
-  just work.
-- ⏱️ **Slim countdown banner**, slides down from the top with the show's
-  **poster**, the show/episode, and a live countdown. Stays out of your way.
-  Five layouts: **standard**, with text buttons; **thin**, about half the
-  height with icon buttons and a one line hint for the focused icon; **uber
-  thin**, a single line of text with small icon buttons and no poster; and
-  **uber thin, no buttons**, the same line with nothing to press, which just
-  counts down to the slot's *When the countdown ends* action (Back still
-  cancels it, and a missed slot's catch up banner gets the buttons back);
-  and **Full Monty**, for movie night: the fanart fills the screen and a
-  centred panel shows the big poster, the year, running time, genres and
-  rating, the tagline and the synopsis, with the buttons underneath.
-  Pick a default in the settings and override it per slot.
-- 🎬 **One-tap actions**:
-  - **Start Now**, play immediately.
-  - **Snooze**, 5 / 10 / 15 / 30 / 60 minutes, then it asks again.
-  - **Queue Next**, finish what you're watching, then play the slot.
-  - **Stop & Resume After**, stop now, play the slot, then **resume what you
-    were watching** from where you left off.
-  - **Cancel**, skip this one.
-- ⏳ **You decide what happens if you ignore it**, each slot picks what the
-  countdown does when it reaches zero: **queue it** for when your current show
-  finishes (the default), **start it now**, **stop and resume after**, or
-  **do nothing** and let it pass.
-- 🌙 **Catch-up window**, had Kodi switched off when a show was due? Turn it on
-  within a configurable window (up to 12 h) and Engage still prompts you. Leave
-  it off for a week and it stays quiet, no pile-up of stale prompts.
-- ✅ **Watched it early?** If you've played the show within the last few hours
-  (4 by default, adjustable, 0 turns it off) the slot stays quiet that day
-  instead of nagging you about what you just watched.
-- 🗂️ **Friendly slot manager**, a full screen list of every slot with what it
-  plays, when it runs and when it's next due, sortable by next up, A to Z,
-  time of day or type. Add, edit, duplicate and delete slots through simple
-  on-screen menus that work perfectly with a remote. No fiddly keypads.
-- ⏹️ **Ends At in the Functional skin**, each slot has a switch for whether the
-  Functional skin's Coming up list may show an "Ends At" line after a run of
-  back to back slots that ends with it. It changes only what the skin shows.
-- 💾 **Backup & Restore**, save all your slots and settings to a JSON file and
-  restore them on any box. Perfect for moving to a new media centre.
-
-## Install
-
-1. Download the latest `service.engage-x.y.z.zip` from the
-   [**Releases**](../../releases) page.
-2. In Kodi: **Settings → System → Add-ons → Unknown sources** (enable it).
-3. **Add-ons → Install from zip file** → pick the downloaded zip.
-4. That's it, Engage starts automatically and runs every time Kodi launches.
-
-Or install the [DeliciousCoffee repository](https://github.com/c0def0rc0ffee/DeliciousCoffee) once and Kodi installs and updates it for you.
-
-> Upgrading? Installing a newer zip replaces the old one. Your slots and settings
-> are kept safe in `userdata` and carry over untouched.
-
-## Getting started
-
-Open Engage from **Add-ons → Program add-ons → Engage** (or **Services → Engage →
-Configure**) and choose **Manage slots…**
-
-1. **+ Add new slot…**
-2. Pick a favourite, a day, and a time. Done.
-
-> **Tip:** the thing you want to watch must be in **Kodi Favourites** first
-> (Engage finds it by name). For a TV show, favourite the show itself, Engage
-> figures out the next episode for you.
-
-### Settings (General)
-
-| Setting | What it does |
+| Feature | In short |
 |---|---|
-| **Poll interval** | How often the scheduler checks, in seconds |
-| **Catch-up window** | Hours after a missed slot it will still prompt you (0 = off) |
-| **Max missed-slot banners** | How many times an overdue banner reappears before giving up |
-| **Skip a slot watched in the last** | Hours after you played a slot's show (or a sequence item) that it stays quiet, 0 = off |
-| **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons), Uber thin, no buttons (one line that counts down to the slot's countdown action) or Full Monty (centre screen with the picture and synopsis). Every slot whose own **Banner style** is left on Default follows this, from the next banner on |
-| **Show all favourites in pickers** | Off = only video/TV favourites are listed |
-| **Debug logging** | Verbose logging to `kodi.log` for troubleshooting |
-| **Test mode** | Fire all enabled slots immediately (handy for testing) |
-| **Allow JellyStat to manage slots** | On by default. Lets the JellyStat add-on's web dashboard on the same Kodi list, add, edit and delete slots and take or restore a backup. Engage listens on this Kodi only, never on the network; JellyStat's own password guards the dashboard |
+| **Slots** | Weekly, every 2 to 4 weeks, monthly, yearly or once, on several days and times. |
+| **Next episode** | Plays the next unwatched episode, specials last. |
+| **Movie sequences** | An ordered run of films, next unwatched each time. |
+| **Binge orders** | Episodes from several shows woven into one crossover order. |
+| **Functional skin lists** | Play a skin list in order, at random or one episode per show. |
+| **Banner layouts** | Standard, Thin, Uber thin, Uber thin with no buttons, or Full Monty. |
+| **One tap actions** | Start Now, Snooze, Queue Next, Stop & Resume After, Cancel. |
+| **Catch up** | Prompts for a missed slot when Kodi comes back, and stays quiet if you watched early. |
+| **Backup and restore** | All slots and settings to one JSON file. |
 
-## For skinners
+<p align="center">
+  <img src="docs/screenshots/slots.png" width="400" alt="The Manage slots window listing five sample slots: a weekly film sequence, a Functional skin list, an every two weeks favourite, a monthly favourite and a one off date, each with when it runs and when it is next due.">
+  <img src="docs/screenshots/full-monty.png" width="400" alt="The Full Monty banner for a sample film: a large poster, the year, running time, genre and rating, a tagline and a short synopsis over the film's fanart, with Start Now, Snooze and Cancel buttons.">
+</p>
 
-While the service runs it publishes the next slot due as properties on Kodi's
-Home window, refreshed after every check, after a slot is saved, after a
-library change and a few seconds after any playback ends, and cleared when the service stops or no slot is enabled. Each
-property is written only when its value changes. The Functional skin (0.17.0
-and later) uses them for its "Coming up" block, and (0.18.0 and later) the
-numbered rows below for its "Coming up" list.
+## Documentation
 
-| `Window(home).Property(...)` | What it holds | Example |
-|---|---|---|
-| `Engage.Next.Label` | The slot's label. Empty when nothing is coming up, so gate the block on this | `Voyager` |
-| `Engage.Next.Episode` | The next episode or film line, as on the banner. Empty for a plain favourite | `S03E04, Gravity` |
-| `Engage.Next.When` | When it is due, in words | `Tonight 19:00`, `Tomorrow 19:00`, `Thursday 19:00`, `Thursday 22/10/2026 19:00` |
-| `Engage.Next.Day` | The weekday | `Thursday` |
-| `Engage.Next.Date` | The date, `dd/mm/yyyy` | `15/10/2026` |
-| `Engage.Next.Time` | The time, `HH:MM` | `19:00` |
-| `Engage.Next.Thumb` | Poster or thumbnail path, may be empty | |
-| `Engage.Next.SlotId` | The slot's id | `3` |
-| `Engage.Next.State` | `upcoming`, `warning`, `snoozed` or `overdue` | `upcoming` |
-| `Engage.Next.Count` | How many slots are enabled | `4` |
-
-Beside that single set, the next 50 occurrences across every enabled slot,
-in due order over the coming seven days, are published as numbered rows. Each
-row is the slot's title and when it is due, deliberately without an episode
-line. Number 1 is the same occurrence as the single set. A Functional list
-slot is named differently: a random one by its list, an in order one by the
-item due to play, and a second showing of it by the item after that. Once an in
-order unwatched or one episode from each show list is all watched, its slot has
-no rows (it still comes due and says it is all watched), so the next slot moves
-up. A weekly slot on two
-days this week appears twice; a number with no occurrence has both properties
-cleared, so gate the list on `Engage.Next.1.Label` and each row on its own
-label. Rows are written from 50 down to 1 with each row's label last, and
-cleared from 1 upwards with each row's label first, so a half updated list is
-never shown.
-
-| `Window(home).Property(...)` | What it holds | Example |
-|---|---|---|
-| `Engage.Next.1.Label` to `Engage.Next.50.Label` | The slot's label; for a Functional list slot, the list's name when it picks at random, or the item it will play when it plays in order | `Voyager` |
-| `Engage.Next.1.When` to `Engage.Next.50.When` | When it is due, the same words as `Engage.Next.When` | `Tonight 19:00` |
-| `Engage.Next.1.Due` to `Engage.Next.50.Due` | When it is due, as `YYYY-MM-DDTHH:MM` for a skin to calculate with | `2026-10-22T19:00` |
-| `Engage.Next.1.Runtime` to `Engage.Next.50.Runtime` | How long what it will play runs, in whole seconds; empty when that cannot be known, such as a random list pick not yet drawn, a plain file or a plugin | `2640` |
-| `Engage.Next.1.EndsAt` to `Engage.Next.50.EndsAt` | `1` when the slot's "Ends At line after it" switch is on (the default), empty when off; a setting for the Functional skin's Coming up list | `1` |
-
-## For developers
-
-`build-zip.sh` reads the version from `VERSION` (kept in sync with
-`service.engage/addon.xml`), runs the add-on checks in `tests/check_addon.py`,
-and produces an installable zip in `Engage Dist/` (forward-slash paths and a
-directory entry for the add-on folder, so Kodi on every platform accepts it),
-a source zip in `Engage Git/`, and a runnable copy of the add-on in
-`Engage App/`. `build-zip.ps1` is the superseded Windows script, kept for
-reference and no longer run.
-
-```
-service.engage/
-├─ addon.xml              add-on manifest (service + program/script)
-├─ service.py             service entry point
-├─ script.py              launcher menu + action dispatcher
-└─ resources/
-   ├─ settings.xml        General settings
-   ├─ lib/
-   │  ├─ scheduler.py     polling loop, episode resolution, playback, resume
-   │  ├─ prompt.py        the countdown banner (WindowXMLDialog)
-   │  ├─ slots.py         JSON slot store + backup/restore
-   │  ├─ slot_manager.py  dialog-driven slot management UI
-   │  ├─ slot_rules.py    slot validation and the API shape of a slot
-   │  ├─ api_server.py    loopback API the JellyStat dashboard manages slots through
-   │  └─ favourites_ui.py favourites picker / add / remove
-   └─ skins/Default/      banner skins (standard, thin, uber thin, Full Monty) + textures and icons
-```
+- [Features in full](docs/features.md)
+- [Settings](docs/settings.md)
+- [Skin properties](docs/skinners.md) for skin authors
+- [Building and source tree](docs/developers.md)
 
 ## Licence
 
