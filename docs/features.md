@@ -60,6 +60,10 @@ an episode in one evening.
 - **Ends At in the Functional skin.** Each slot has a switch for whether the
   Functional skin's Coming up list may show an "Ends At" line after a run of
   back to back slots that ends with it. It changes only what the skin shows.
+- **Coming up countdown.** One switch in the settings, off by default, counts
+  down to the slot that plays next: in the last 30 minutes (5 to 120, your
+  choice) a skin's Coming up list shows the minutes left and a bar that empties
+  as it nears. The Functional skin draws it on that slot's line.
 
 ## The countdown banner
 
@@ -74,7 +78,10 @@ episode, and a live countdown. It stays out of your way. Five layouts:
 | **Uber thin, no buttons** | The same line with nothing to press. It just counts down to the slot's *When the countdown ends* action. Back still cancels it, and a missed slot's catch up banner gets the buttons back. |
 | **Full Monty** | For movie night: the fanart fills the screen and a centred panel shows the big poster, the year, running time, genres and rating, the tagline and the synopsis, with the buttons underneath. |
 
-Pick a default in the settings and override it per slot.
+Pick a default in the settings and override it per slot. One more switch, off
+by default, keeps the Full Monty for when nothing is playing: with it on, a
+Full Monty banner that would open over something already playing, such as a
+slot that follows straight on from another, opens as Uber thin instead.
 
 ## One tap actions
 
