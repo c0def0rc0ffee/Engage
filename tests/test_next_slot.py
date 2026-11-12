@@ -436,23 +436,24 @@ def test_publish():
 def test_property_order():
     """<summary>Rows written from NEXT_LIST_COUNT down to 1, Label last; cleared from 1 up, Label first.</summary>"""
     publishing = scheduler.next_property_order({'Label': 'x', '1.Label': 'x', '2.Label': 'x'})
-    equal(publishing[:10], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
+    SINGLE = len(scheduler.NEXT_PROPERTY_NAMES)
+    equal(publishing[:SINGLE], list(scheduler.NEXT_PROPERTY_NAMES), 'single set first, in its order')
     top = scheduler.NEXT_LIST_COUNT
-    equal(publishing[10:15], ['{}.{}'.format(top, n) for n in ('Label', 'When', 'EndsAt', 'Runtime', 'Due')],
+    equal(publishing[SINGLE:SINGLE + 5], ['{}.{}'.format(top, n) for n in ('Label', 'When', 'EndsAt', 'Runtime', 'Due')],
           'an empty row clears Label first')
     equal(publishing[-10:], ['2.Due', '2.Runtime', '2.EndsAt', '2.When', '2.Label',
                              '1.Due', '1.Runtime', '1.EndsAt', '1.When', '1.Label'],
           'occupied rows end with row 1, each Label last')
-    equal(len(publishing), 10 + 5 * scheduler.NEXT_LIST_COUNT, 'every name once')
+    equal(len(publishing), SINGLE + 5 * scheduler.NEXT_LIST_COUNT, 'every name once')
     check(not any(name.endswith('.Episode') for name in publishing), 'rows have no Episode')
     clearing = scheduler.next_property_order({})
-    equal(clearing[:10], list(reversed(scheduler.NEXT_PROPERTY_NAMES)), 'single set reversed')
-    equal(clearing[10:20], ['1.Label', '1.When', '1.EndsAt', '1.Runtime', '1.Due',
+    equal(clearing[:SINGLE], list(reversed(scheduler.NEXT_PROPERTY_NAMES)), 'single set reversed')
+    equal(clearing[SINGLE:SINGLE + 10], ['1.Label', '1.When', '1.EndsAt', '1.Runtime', '1.Due',
                             '2.Label', '2.When', '2.EndsAt', '2.Runtime', '2.Due'],
           'rows from 1 upwards, Label first')
     full = scheduler.next_property_order({name: 'x' for name in publishing})
-    equal(list(reversed(full[10:])), clearing[10:], 'rows are cleared in the reverse of their publish order')
-    equal(list(reversed(full[:10])), clearing[:10], 'and so is the single set')
+    equal(list(reversed(full[SINGLE:])), clearing[SINGLE:], 'rows are cleared in the reverse of their publish order')
+    equal(list(reversed(full[:SINGLE])), clearing[:SINGLE], 'and so is the single set')
 
 
 # --- _occurrences -----------------------------------------------------------------
@@ -662,11 +663,55 @@ class _FixedDatetime(datetime):
         return cls.fixed
 
 
+def test_countdown():
+    """<summary>The Coming up countdown: off by default, only inside its window, on the single set only.</summary>"""
+    now = datetime(2026, 11, 12, 18, 0)
+    at = lambda minutes, seconds=0: now + timedelta(minutes=minutes, seconds=seconds)
+    equal(scheduler.countdown_values(at(20), now, 0), ('', ''), 'a 0 minute window is off')
+    equal(scheduler.countdown_values(at(31), now, 30), ('', ''), 'further away than the window')
+    equal(scheduler.countdown_values(at(30), now, 30), ('Starts in 30 min', '100'), 'the window opens full')
+    equal(scheduler.countdown_values(at(15), now, 30), ('Starts in 15 min', '50'), 'half way')
+    equal(scheduler.countdown_values(at(23, 10), now, 30), ('Starts in 24 min', '77'),
+          'minutes round up, so it never says sooner than it is')
+    equal(scheduler.countdown_values(at(0, 40), now, 30), ('Starting now', '0'), 'the last minute')
+    equal(scheduler.countdown_values(at(0), now, 30), ('', ''), 'gone once it is due')
+    equal(scheduler.countdown_values(at(-5), now, 30), ('', ''), 'an overdue slot has none')
+
+    reset_window()
+    store.save_slots([make_slot(1, 'Voyager', ['Thursday'], 19),
+                      make_slot(2, 'TNG', ['Thursday'], 19, 30)])
+    sched = make_scheduler({})
+    scheduler.datetime = _FixedDatetime.at(datetime(2026, 11, 12, 18, 45))  # Thursday
+    try:
+        sched._publish_next('test')
+        equal((props().get('Countdown'), props().get('CountdownPercent')), (None, None),
+              'the switch is off by default, so nothing is written')
+        _Addon.settings['next_countdown'] = 'true'
+        _Addon.settings['next_countdown_minutes'] = 30
+        sched._publish_next('test')
+        equal((props().get('Countdown'), props().get('CountdownPercent')),
+              ('Starts in 15 min', '50'), 'switched on, the next slot counts down')
+        check(not any(key.endswith('.Countdown') or key.endswith('.CountdownPercent')
+                      for key in props() if key[0].isdigit()),
+              'only the slot that plays next counts down, never a row')
+        _Addon.settings['next_countdown_minutes'] = 10
+        sched._publish_next('test')
+        equal(props().get('Countdown'), None, 'a shorter window clears it again')
+        _Addon.settings['next_countdown'] = 'false'
+        _Addon.settings['next_countdown_minutes'] = 30
+        sched._publish_next('test')
+        equal(props().get('Countdown'), None, 'switching off clears it')
+    finally:
+        scheduler.datetime = datetime
+        _Addon.settings.pop('next_countdown', None)
+        _Addon.settings.pop('next_countdown_minutes', None)
+
+
 def main():
     """<summary>Run every test and exit non zero if any check failed.</summary>"""
     for test in (test_when_label, test_occurrence_key, test_next_occurrence, test_occurrences,
                  test_next_state, test_property_order, test_publish, test_publish_list,
-                 test_runtimes, test_multi_times):
+                 test_runtimes, test_multi_times, test_countdown):
         print('running {}'.format(test.__name__))
         test()
     if FAILURES:

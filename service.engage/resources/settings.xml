@@ -4,7 +4,9 @@
   Kodi settings definition for the add-on: one General category holding the
   read-only version field, the Manage slots action button, debug logging, the
   poll interval, the catch-up window and its prompt cap, the recent watch
-  window, the master banner style, the one-shot test mode, the favourites filter
+  window, the master banner style, the switch that shows a Full Monty banner
+  as Uber thin over playback, the Coming up countdown and its minutes, the
+  one-shot test mode, the favourites filter
   switch, the switch for the add-on API that the JellyStat dashboard uses, and
   the hidden sort order of the Manage slots window.
   Labels are plain text; the add-on ships no strings.po.
@@ -34,6 +36,17 @@
          3 = Uber thin with no buttons, 4 = Full Monty. New styles go on
          the end only. -->
     <setting id="banner_style" type="enum" label="Default banner style" values="Standard|Thin|Uber thin|Uber thin, no buttons|Full Monty" default="0"/>
+    <!-- Off by default. When on, a banner that would open as the Full Monty
+         opens as Uber thin instead while something is already playing, so a
+         slot that follows straight on from another does not cover the screen.
+         Read at popup time by slots.fullmonty_over_playback_setting. -->
+    <setting id="fullmonty_over_playback_uberthin" type="bool" label="Show a Full Monty banner as Uber thin over playback" default="false"/>
+    <!-- Off by default. When on, the slot that plays next counts down for the
+         last next_countdown_minutes before it starts, published as
+         Engage.Next.Countdown and Engage.Next.CountdownPercent for a skin's
+         Coming up list. One switch for every slot. -->
+    <setting id="next_countdown" type="bool" label="Count down to the next slot in Coming up" default="false"/>
+    <setting id="next_countdown_minutes" type="slider" label="Start the countdown this many minutes before" default="30" range="5,5,120" option="int" enable="eq(-1,true)"/>
     <setting id="test_mode" type="bool" label="Test mode (trigger all enabled slots immediately)" default="false"/>
     <setting id="show_all_favourites" type="bool" label="Show all favourites in pickers (off = video/TV only)" default="false"/>
     <!-- Starts Engage's add-on API (resources/lib/api_server.py), which listens on

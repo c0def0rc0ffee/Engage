@@ -12,6 +12,9 @@ Configure**.
 | **Max missed-slot banners** | How many times an overdue banner reappears before giving up. |
 | **Skip a slot watched in the last** | Hours after you played a slot's show (or a sequence item) that it stays quiet, 0 is off. |
 | **Default banner style** | Standard (the full height banner with text buttons), Thin (a slim banner with icon buttons), Uber thin (one line with icon buttons), Uber thin, no buttons (one line that counts down to the slot's countdown action) or Full Monty (centre screen with the picture and synopsis). Every slot whose own **Banner style** is left on Default follows this, from the next banner on. |
+| **Show a Full Monty banner as Uber thin over playback** | Off by default. When on, a banner that would open as the Full Monty opens as Uber thin instead if something is already playing, such as a slot that follows straight on from another or the same slot twice in a row. With nothing playing the Full Monty shows as usual. |
+| **Count down to the next slot in Coming up** | Off by default. When on, the slot that plays next shows a countdown in a skin's Coming up list for the last stretch before it starts: a bar that empties and the minutes left. One switch for every slot. |
+| **Start the countdown this many minutes before** | How long the countdown runs, 5 to 120 minutes, 30 by default. |
 | **Show all favourites in pickers** | Off lists only video and TV favourites. |
 | **Debug logging** | Verbose logging to `kodi.log` for troubleshooting. |
 | **Test mode** | Fire all enabled slots immediately (handy for testing). |

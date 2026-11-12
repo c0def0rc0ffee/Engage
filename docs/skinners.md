@@ -23,6 +23,8 @@ the numbered rows below for its "Coming up" list (0.18.0 and later).
 | `Engage.Next.SlotId` | The slot's id. | `3` |
 | `Engage.Next.State` | `upcoming`, `warning`, `snoozed` or `overdue`. | `upcoming` |
 | `Engage.Next.Count` | How many slots are enabled. | `4` |
+| `Engage.Next.Countdown` | The countdown to the slot that plays next, in words, rounded up to the minute. Empty unless the user has switched the countdown on and the slot is due within its window (30 minutes by default); cleared once it is due. Only this set has it, never a numbered row. | `Starts in 24 min`, `Starting now` |
+| `Engage.Next.CountdownPercent` | How much of the countdown window is still to run, a whole percent from 100 down to 0, for a progress control's `info`. Empty whenever `Countdown` is. | `77` |
 
 ## The numbered rows
 

@@ -438,6 +438,48 @@ def resolve_banner_style(slot_style, master_style):
     return DEFAULT_BANNER_STYLE
 
 
+def fullmonty_over_playback_setting():
+    """
+    <summary>
+    Whether a Full Monty banner should open as Uber thin while something is
+    already playing, from the add-on settings, read fresh each call.
+    </summary>
+    <returns>True when the switch is on; False when it is off or cannot be read.</returns>
+    <remarks>
+    Off by default, so a Full Monty banner looks the same over playback as it
+    always has until the switch is turned on.
+    </remarks>
+    """
+    try:
+        import xbmcaddon
+        raw = xbmcaddon.Addon(ADDON_ID).getSetting('fullmonty_over_playback_uberthin')
+        return str(raw).strip().lower() == 'true'
+    except Exception as e:
+        _log('could not read fullmonty_over_playback_uberthin setting, leaving it off: {}'.format(e),
+             xbmc.LOGWARNING)
+        return False
+
+
+def banner_style_over_playback(style, playing, step_down):
+    """
+    <summary>
+    The layout a banner uses once playback is taken into account: the Full
+    Monty steps down to Uber thin when something is playing and the switch
+    is on; every other case keeps the style it was given.
+    </summary>
+    <param name="style">The resolved style, as resolve_banner_style returns it.</param>
+    <param name="playing">True when Kodi is playing something as the banner opens.</param>
+    <param name="step_down">The switch, as fullmonty_over_playback_setting returns it.</param>
+    <returns>BANNER_UBERTHIN when all three call for it, else style unchanged.</returns>
+    <remarks>
+    Kept free of Kodi calls so the tests can drive every combination.
+    </remarks>
+    """
+    if step_down and playing and style == BANNER_FULLMONTY:
+        return BANNER_UBERTHIN
+    return style
+
+
 def _log(msg, level=xbmc.LOGINFO):
     """
     <summary>

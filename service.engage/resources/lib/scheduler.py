@@ -60,7 +60,15 @@ CATCHUP_FALLBACK_HOURS = 6
 HOME_WINDOW_ID = 10000
 NEXT_PROPERTY_PREFIX = 'Engage.Next.'
 NEXT_PROPERTY_NAMES = ('Episode', 'When', 'Day', 'Date', 'Time', 'Thumb',
-                       'SlotId', 'State', 'Count', 'Label')
+                       'SlotId', 'State', 'Count', 'Countdown', 'CountdownPercent', 'Label')
+# The Coming up countdown (12/11/2026): with the next_countdown setting on and the
+# next occurrence due within next_countdown_minutes, Countdown holds the words
+# ('Starts in 24 min', 'Starting now' under a minute) and CountdownPercent the
+# share of the window still to run, 100 down to 0, for a skin's progress bar.
+# Both are empty otherwise. Only the single set has them, so only the slot that
+# plays next counts down. Used when the minutes setting cannot be read; matches
+# the default declared in resources/settings.xml.
+COUNTDOWN_FALLBACK_MINUTES = 30
 # Beside the single set, the next NEXT_LIST_COUNT occurrences across every
 # enabled slot are published in due order as Engage.Next.<n>.Label and .When
 # (n from 1), for a skin's "Coming up" list. Number 1 is the same occurrence
@@ -148,6 +156,39 @@ def when_label(due, now):
     if days_ahead < 7:
         return '{} {}'.format(weekday, time_text)
     return '{} {:02d}/{:02d}/{:04d} {}'.format(weekday, due.day, due.month, due.year, time_text)
+
+
+def countdown_values(due, now, window_minutes):
+    """
+    <summary>
+    The Coming up countdown for the next occurrence: its words and the share of
+    the window still to run.
+    </summary>
+    <param name="due">The occurrence's datetime.</param>
+    <param name="now">The current time.</param>
+    <param name="window_minutes">How long before the occurrence the countdown
+    starts; 0 or less means the countdown is off.</param>
+    <returns>A (Countdown, CountdownPercent) pair of strings: 'Starts in N min'
+    and the whole percent left, or 'Starting now' and '0' in the last minute;
+    ('', '') when the countdown is off, the occurrence is further away than the
+    window, or it is already due.</returns>
+    <remarks>
+    Minutes are rounded up, so the words never say a slot starts sooner than it
+    does: 23 minutes 10 seconds away reads 'Starts in 24 min'. Kept free of Kodi
+    calls so the tests can drive it.
+    </remarks>
+    """
+    if window_minutes <= 0:
+        return '', ''
+    seconds = (due - now).total_seconds()
+    window = window_minutes * 60
+    if seconds <= 0 or seconds > window:
+        return '', ''
+    percent = str(int(round(100 * seconds / window)))
+    if seconds < 60:
+        return 'Starting now', '0'
+    minutes = int(-(-seconds // 60))
+    return 'Starts in {} min'.format(minutes), percent
 
 
 def next_property_order(values):
@@ -2073,6 +2114,32 @@ class EngageScheduler:
                 xbmc.sleep(500)
         self._log('Resume seek did not stick after retries', xbmc.LOGWARNING)
 
+    def _countdown_minutes(self):
+        """
+        <summary>
+        How many minutes before the next slot the Coming up countdown starts, 0
+        meaning the countdown is off.
+        </summary>
+        <returns>Minutes as an int, never negative; 0 while the next_countdown
+        switch is off.</returns>
+        <remarks>
+        Read on every publish so a change in the settings screen applies to the
+        next tick without a restart. A failed read of the minutes falls back to
+        COUNTDOWN_FALLBACK_MINUTES; a failed read of the switch leaves it off.
+        </remarks>
+        """
+        try:
+            addon = xbmcaddon.Addon(ADDON_ID)
+            if str(addon.getSetting('next_countdown')).strip().lower() != 'true':
+                return 0
+        except Exception:
+            return 0
+        try:
+            minutes = addon.getSettingInt('next_countdown_minutes')
+        except Exception:
+            minutes = COUNTDOWN_FALLBACK_MINUTES
+        return max(0, int(minutes))
+
     def _recent_watch_hours(self):
         """
         <summary>
@@ -2251,7 +2318,9 @@ class EngageScheduler:
         The banner layout is resolved here, each time, from the slot's own choice
         and the master setting (slots.resolve_banner_style), so changing the master
         in the settings dialog changes every slot left on 'default' from the next
-        banner on, without touching slots.json.
+        banner on, without touching slots.json. With the over playback switch on,
+        a Full Monty that would open while something is playing opens as Uber
+        thin instead (slots.banner_style_over_playback).
         </remarks>
         """
         from resources.lib.prompt import show_engage_prompt
@@ -2259,6 +2328,10 @@ class EngageScheduler:
         addon_path = xbmcaddon.Addon(ADDON_ID).getAddonInfo('path')
         banner_style = slot_store.resolve_banner_style(
             slot.banner_style, slot_store.master_banner_style())
+        if banner_style == slot_store.BANNER_FULLMONTY:
+            banner_style = slot_store.banner_style_over_playback(
+                banner_style, xbmc.Player().isPlaying(),
+                slot_store.fullmonty_over_playback_setting())
 
         # Work out the sub-line + poster for the banner, fresh from the library
         # so the banner never offers an episode that was watched since the
@@ -2572,7 +2645,9 @@ class EngageScheduler:
         left out (_drop_spent_rows). The earliest is the single set: Label is the slot's label, Episode
         the banner's episode line (empty for a non-TV favourite), When the words from
         when_label; Day, Date (dd/mm/yyyy), Time (HH:MM), Thumb, SlotId, State and
-        Count (enabled slots) are extras. The first NEXT_LIST_COUNT occurrences are the
+        Count (enabled slots) are extras, and Countdown and CountdownPercent are
+        the Coming up countdown from countdown_values, empty unless it is switched
+        on and the slot is due within its window. The first NEXT_LIST_COUNT occurrences are the
         numbered rows, each with its own Label and When and no episode line, so a
         skin's list shows titles only, plus Due and Runtime (see _row_runtime) for a
         skin that works out queued start times; a number with no occurrence is cleared. A row's
@@ -2614,6 +2689,8 @@ class EngageScheduler:
                     'State': self._next_state(slot, due, key, now),
                     'Count': str(len({s.id for s in slots})),
                 }
+                values['Countdown'], values['CountdownPercent'] = countdown_values(
+                    due, now, self._countdown_minutes())
                 shown = {}
                 for number, (row_due, row_key, row_slot) in enumerate(upcoming[:NEXT_LIST_COUNT], start=1):
                     nth = shown.get(row_slot.id, 0)

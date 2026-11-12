@@ -23,6 +23,7 @@ Usage:
 
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -436,6 +437,18 @@ def test_banner_style_resolution():
         check(style in prompt.BANNER_XML, '{} has a window'.format(style))
     equal(prompt.banner_xml_for('fullmonty'), 'EngagePromptFullMonty.xml', 'the Full Monty has its own window')
 
+    # The over playback step down, every combination.
+    for style in store.BANNER_STYLES:
+        for playing in (False, True):
+            for step_down in (False, True):
+                want = 'uberthin' if (style == 'fullmonty' and playing and step_down) else style
+                equal(store.banner_style_over_playback(style, playing, step_down), want,
+                      'over playback: {} playing={} switch={}'.format(style, playing, step_down))
+    equal(store.fullmonty_over_playback_setting(), False, 'the over playback switch is off by default')
+    with open(os.path.join(ADDON_DIR, 'resources', 'settings.xml')) as f:
+        check(re.search(r'id="fullmonty_over_playback_uberthin" type="bool"[^>]*default="false"',
+                        f.read()) is not None, 'the switch is declared and off by default')
+
     # The Full Monty's lines, from what the library returns for each kind.
     film = prompt.full_monty_details('movie', {
         'plot': 'Spice.', 'year': 2021, 'runtime': 9300, 'genre': ['Science Fiction', 'Adventure', 'Drama', 'War'],
@@ -524,9 +537,24 @@ def test_banner_style_resolution():
         sched._handle_warning(own_choice, when)
         equal((opened[-2:], given[-2:], looked), (['fullmonty', 'standard'], [{'plot': 'P'}, None], [3]),
               'the Full Monty gets its details; a standard banner straight after does not')
+
+        # Over playback the Full Monty steps down to Uber thin, but only with the
+        # switch on; with nothing playing it shows in full either way.
+        PLAYING[0] = True
+        sched._handle_warning(monty, when)
+        _Addon.settings['fullmonty_over_playback_uberthin'] = 'true'
+        sched._handle_warning(monty, when)
+        sched._handle_warning(own_choice, when)
+        PLAYING[0] = False
+        sched._handle_warning(monty, when)
+        equal(opened[-4:], ['fullmonty', 'uberthin', 'standard', 'fullmonty'],
+              'the switch steps the Full Monty down over playback and nothing else')
+        equal(looked, [3, 3, 3], 'the stepped down banner skips the details lookup')
     finally:
         prompt.show_engage_prompt = real_prompt
         _Addon.settings.pop('banner_style', None)
+        _Addon.settings.pop('fullmonty_over_playback_uberthin', None)
+        PLAYING[0] = False
 
 
 def main():
