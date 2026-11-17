@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import types
 from datetime import date, datetime
 
@@ -139,6 +140,10 @@ xbmc.Player = _Player
 xbmc.executebuiltin = lambda cmd: None
 xbmc.executeJSONRPC = fake_jsonrpc
 xbmc.getCondVisibility = lambda cond: True
+# Info labels the scheduler reads; LIST-EACH's end check reads the video
+# playlist length, which defaults to a list still holding episodes.
+INFO_LABELS = {'Playlist.Length(video)': '2'}
+xbmc.getInfoLabel = lambda label: INFO_LABELS.get(label, '')
 xbmc.sleep = lambda ms: None
 
 xbmcaddon = types.ModuleType('xbmcaddon')
@@ -575,20 +580,123 @@ def test_each_show():
           'later showings take the next of each; a show that runs out drops out')
     equal(sched._lookup_runtimes(slot)[:2], [2700, 2700], 'a showing runs as long as its episodes together')
 
-    playing = {'now': True}
-    real_player = scheduler.xbmc.Player
-    scheduler.xbmc.Player = lambda: types.SimpleNamespace(isPlaying=lambda: playing['now'])
-    try:
-        sched._each_end_check()
-        check(sched._each_playing, 'an end while the next episode is playing is not the end')
-        playing['now'] = False
-        sched._each_end_check()
-        check(not sched._each_playing, 'an end with nothing playing is')
-    finally:
-        scheduler.xbmc.Player = real_player
+    test_each_end_wait(sched)
     EPISODE_PLAYS.update({111: 1, 501: 1})
     sched._next_rows_cache.clear()
     equal(sched._describe_slot(slot)[0], '2 episodes: Delta S01E02, Echo S01E02', 'watched ones move it on')
+
+
+def test_each_end_wait(sched):
+    """
+    <summary>
+    LIST-EACH: the end check waits for Kodi to open the next episode, which
+    takes longer than three seconds for a Jellyfin episode, and only takes the
+    end as real once nothing has played for the whole wait or the playlist is
+    empty.
+    </summary>
+    <param name="sched">A scheduler whose one episode from each show playlist is running.</param>
+    """
+    polls = int(scheduler.EACH_END_WAIT_SECONDS / scheduler.EACH_END_POLL_SECONDS)
+    check(scheduler.EACH_END_WAIT_SECONDS >= 10, 'the wait outlasts a slow Jellyfin open')
+    state = {'calls': 0, 'starts_at': None}
+    ended = []
+
+    def is_playing():
+        """<summary>Nothing plays until poll starts_at, then the next episode does.</summary>"""
+        state['calls'] += 1
+        return state['starts_at'] is not None and state['calls'] >= state['starts_at']
+
+    real_player, real_after = scheduler.xbmc.Player, sched._after_playback_ended
+    scheduler.xbmc.Player = lambda: types.SimpleNamespace(isPlaying=is_playing)
+    sched._after_playback_ended = lambda: ended.append(True)
+    try:
+        # The next episode opens on the eighth poll, about four seconds in: the
+        # old three second check took this for the end of the list.
+        sched._each_playing, state['calls'], state['starts_at'] = True, 0, 8
+        sched._each_end_check()
+        check(sched._each_playing, 'a step that takes four seconds is not the end')
+        equal(ended, [], 'and no queued slot or resume runs for it')
+        equal(state['calls'], 8, 'the wait stops as soon as the episode plays')
+
+        # The very last poll still counts.
+        sched._each_playing, state['calls'], state['starts_at'] = True, 0, polls
+        sched._each_end_check()
+        check(sched._each_playing and not ended, 'an episode opening on the last poll is still a step')
+
+        # Nothing plays for the whole wait: the real end.
+        sched._each_playing, state['calls'], state['starts_at'] = True, 0, None
+        sched._each_end_check()
+        check(not sched._each_playing, 'nothing playing for the whole wait is the end')
+        equal(ended, [True], 'and the usual end handling runs once')
+        equal(state['calls'], polls, 'after every poll of the wait')
+
+        # An emptied playlist ends the wait on the first poll.
+        del ended[:]
+        INFO_LABELS['Playlist.Length(video)'] = '0'
+        sched._each_playing, state['calls'], state['starts_at'] = True, 0, None
+        sched._each_end_check()
+        check(not sched._each_playing and ended == [True], 'an empty playlist is the end')
+        equal(state['calls'], 1, 'found on the first poll')
+        INFO_LABELS['Playlist.Length(video)'] = '2'
+
+        # A blank label is not an empty playlist: the wait carries on.
+        del ended[:]
+        INFO_LABELS['Playlist.Length(video)'] = ''
+        sched._each_playing, state['calls'], state['starts_at'] = True, 0, None
+        sched._each_end_check()
+        equal(state['calls'], polls, 'a blank playlist length does not cut the wait short')
+        INFO_LABELS['Playlist.Length(video)'] = '2'
+
+        # Overlapping ends: only the newest check may act, and only once.
+        del ended[:]
+        sched._each_playing, state['starts_at'] = True, None
+        sched._each_gen = 2
+        state['calls'] = 0
+        sched._each_end_check(1)
+        check(sched._each_playing and not ended, 'a check for an older end gives up')
+        equal(state['calls'], 0, 'before it even looks at the player')
+        sched._each_end_check(2)
+        equal(ended, [True], 'the newest check runs the end handling')
+        sched._each_end_check(2)
+        equal(ended, [True], 'a second check for the same end finds it claimed')
+
+        # Two checks for the same end at once, on real threads.
+        del ended[:]
+        sched._each_playing = True
+        workers = [threading.Thread(target=sched._each_end_check, args=(2,)) for _ in range(4)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+        equal(ended, [True], 'four overlapping checks run the end handling once')
+
+        # Engage playing a slot over the list clears the flag and supersedes checks.
+        sched._each_playing = True
+        before = sched._each_gen
+        real_resolve = sched._resolve_list_item
+        sched._resolve_list_item = lambda slot, key: None
+        try:
+            sched._play_slot(types.SimpleNamespace(kind='list', index=0, list_name='x',
+                                                   list_mode='next', id=99), 'k')
+        except Exception:  # noqa: BLE001, only the flag matters here
+            pass
+        finally:
+            sched._resolve_list_item = real_resolve
+        check(not sched._each_playing, 'playing a slot clears the list flag')
+        check(sched._each_gen > before, 'and supersedes any check still waiting')
+
+        # Kodi shutting down: nothing is decided.
+        del ended[:]
+        real_wait = sched.monitor.waitForAbort
+        sched.monitor.waitForAbort = lambda seconds=0: True
+        try:
+            sched._each_playing, state['calls'], state['starts_at'] = True, 0, None
+            sched._each_end_check()
+            check(sched._each_playing and not ended, 'an abort decides nothing')
+        finally:
+            sched.monitor.waitForAbort = real_wait
+    finally:
+        scheduler.xbmc.Player, sched._after_playback_ended = real_player, real_after
 
 
 def test_group_rows():

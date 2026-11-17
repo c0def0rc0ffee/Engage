@@ -49,6 +49,14 @@ RECENT_WATCH_FALLBACK_HOURS = 4
 # Used only when the catchup_hours setting cannot be read. Matches the default
 # declared in resources/settings.xml and the fallback in _process_slot.
 CATCHUP_FALLBACK_HOURS = 6
+# LIST-EACH: after an end inside a one episode from each show playlist, how
+# long to wait for Kodi to open the next episode before taking the end as the
+# real one, checked every EACH_END_POLL_SECONDS. A Jellyfin episode took 3.5
+# to 4.2 s to open on a real box (kodi.log, 16/11/2026), so the old flat 3 s
+# took most steps for the end of the list and let a queued slot replace it.
+# 20 s matches the allowance _resume_playback gives a plugin stream.
+EACH_END_WAIT_SECONDS = 20
+EACH_END_POLL_SECONDS = 0.5
 
 # The next slot is published for skins as properties on Kodi's Home window,
 # Window(10000), named NEXT_PROPERTY_PREFIX + one of NEXT_PROPERTY_NAMES. The
@@ -487,6 +495,11 @@ class EngageScheduler:
         # LIST-EACH: True while a one episode from each show playlist Engage
         # started is playing; see _on_playback_ended.
         self._each_playing = False
+        # Each end inside that playlist bumps _each_gen; only the check for the
+        # newest end may act, and it claims the end under _each_lock, so two
+        # ends inside one wait never run the end handling twice.
+        self._each_lock = threading.Lock()
+        self._each_gen = 0
         # A random list slot's pick, keyed by occurrence like the trackers
         # above, so the banner, a snoozed re-prompt and the playback all name
         # the same item. COMING-UP-PICK-AHEAD, 22/10/2026: drawn as soon as
@@ -1735,7 +1748,16 @@ class EngageScheduler:
         <param name="key">The occurrence key, so a random list slot plays the item its
         banner named. Every caller has one; it defaults to None only so a list slot
         played without it still plays something.</param>
+        <remarks>
+        Whatever plays now replaces any one episode from each show playlist that was
+        running, so its flag is cleared first, and any end check still waiting for
+        that playlist is superseded; _play_each_playlist sets the flag again when
+        this slot is such a list.
+        </remarks>
         """
+        with self._each_lock:
+            self._each_playing = False
+            self._each_gen += 1
         if slot.kind == 'list':
             item = self._resolve_list_item(slot, key or occurrence_key(slot, datetime.now()))
             if item:
@@ -1963,7 +1985,10 @@ class EngageScheduler:
         # LIST-EACH: Kodi can report an end between the episodes of a playlist
         # Engage started. Wait, and only carry on if nothing is playing then.
         if self._each_playing:
-            threading.Thread(target=self._each_end_check, daemon=True).start()
+            with self._each_lock:
+                self._each_gen += 1
+                gen = self._each_gen
+            threading.Thread(target=self._each_end_check, args=(gen,), daemon=True).start()
             return
         self._after_playback_ended()
 
@@ -1989,25 +2014,59 @@ class EngageScheduler:
         self._next_runtime_cache.clear()
         self._publish_next('playback ended')
 
-    def _each_end_check(self):
+    def _each_end_check(self, gen=None):
         """
         <summary>
         Decide whether the end of playback during a one episode from each show
         playlist is the real end or only the step to its next episode.
         </summary>
         <remarks>
-        LIST-EACH, 22/10/2026. Three seconds is long enough for Kodi to have opened
-        the next episode; if something is playing then, the playlist is still going
-        and nothing happens. Otherwise the playlist has finished, or was stopped,
-        and the usual end handling runs: a resume after, or the next queued slot.
+        LIST-EACH, 22/10/2026. Kodi is given up to EACH_END_WAIT_SECONDS to open the
+        next episode, checked every EACH_END_POLL_SECONDS; as soon as something
+        plays, the playlist is still going and nothing happens. An emptied video
+        playlist ends the wait at once, since nothing can follow. Otherwise, once
+        the wait runs out, the playlist has finished or was stopped, and the usual
+        end handling runs: a resume after, or the next queued slot.
+
+        The wait used to be a flat three seconds. Opening a Jellyfin episode takes
+        longer than that (3.5 to 4.2 s on a real box, 16/11/2026), so most steps
+        between episodes were taken for the end of the list: a slot queued from a
+        banner during the list then fired and replaced it, and every later step
+        counted as an end too. The cost of the longer wait is that a queued slot
+        starts up to that long after a list is stopped or finishes.
+
+        Polls are counted rather than timed, so a monitor whose wait returns at
+        once (the tests) cannot spin.
+
+        A later end (a stop, then the end of something restarted) supersedes this
+        check: it gives up as soon as _each_gen moves on. The end itself is claimed
+        under _each_lock, clearing _each_playing, so the resume or queued slot runs
+        once however many checks overlap. Only '0' counts as an empty playlist; a
+        label that reads blank for a moment is not taken for the end.
         </remarks>
+        <param name="gen">The _each_gen of the end this check is for; None acts
+        regardless, for a direct call.</param>
         """
-        if self.monitor.waitForAbort(3):
-            return
-        if xbmc.Player().isPlaying():
-            self._log('Playlist moved on to its next episode, not the end of playback')
-            return
-        self._each_playing = False
+        polls = max(1, int(EACH_END_WAIT_SECONDS / EACH_END_POLL_SECONDS))
+        for count in range(1, polls + 1):
+            if self.monitor.waitForAbort(EACH_END_POLL_SECONDS):
+                return
+            if gen is not None and gen != self._each_gen:
+                return
+            if xbmc.Player().isPlaying():
+                self._log('Playlist moved on to its next episode after about {:.1f} s, '
+                          'not the end of playback'.format(count * EACH_END_POLL_SECONDS))
+                return
+            if xbmc.getInfoLabel('Playlist.Length(video)') == '0':
+                self._log('The video playlist is empty, the list has ended')
+                break
+        else:
+            self._log('Nothing played within {} s, the list has ended'.format(
+                EACH_END_WAIT_SECONDS))
+        with self._each_lock:
+            if (gen is not None and gen != self._each_gen) or not self._each_playing:
+                return
+            self._each_playing = False
         self._after_playback_ended()
 
     def _after_playback_ended(self):

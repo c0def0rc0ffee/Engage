@@ -3,7 +3,7 @@
 <p align="center"><a href="#quick-start">Quick start</a> · <a href="#what-it-does">Features</a> · <a href="#documentation">Docs</a> · <a href="docs/settings.md">Settings</a> · <a href="docs/skinners.md">Skin properties</a> · <a href="../../releases">Releases</a></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.11.10-blue" alt="Version 1.11.10">
+  <img src="https://img.shields.io/badge/version-1.11.12-blue" alt="Version 1.11.12">
   <img src="https://img.shields.io/badge/licence-GPL--2.0--or--later-green" alt="GPL 2.0 or later licence">
   <img src="https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white" alt="Python 3.8 or newer">
   <img src="https://img.shields.io/badge/Kodi-19%20Matrix%2B-17B2E7?logo=kodi&logoColor=white" alt="Kodi 19 Matrix or newer">
